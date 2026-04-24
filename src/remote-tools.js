@@ -88,15 +88,37 @@ function toRemotePath(filePath) {
     const localPrefix = getLocalCwd();
     const remoteCwd = getRemoteCwd();
 
-    if (filePath.startsWith(localPrefix)) {
-        const rel = filePath.slice(localPrefix.length).replace(/^[\/\\]/, "");
+    // Normalize to forward slashes for comparison
+    const normalizedPath = filePath.replace(/\\/g, "/");
+    const normalizedPrefix = localPrefix.replace(/\\/g, "/");
+
+    // Case 1: path starts with local cwd prefix (Windows or Unix)
+    if (normalizedPath.startsWith(normalizedPrefix)) {
+        const rel = normalizedPath.slice(normalizedPrefix.length).replace(/^[\/\\]/, "");
         return rel ? path.posix.join(remoteCwd, rel) : remoteCwd;
     }
 
+    // Case 2: Windows absolute path like C:\... or C:/...
+    if (/^[a-zA-Z]:[\\/]/.test(filePath)) {
+        // Strip the Windows drive+path prefix that matches localPrefix pattern
+        // e.g. C:\Users\LinZexin\.claude\remote\host\proj\src\foo.py
+        //   -> src/foo.py -> /remote/path/src/foo.py
+        const posixPath = filePath.replace(/\\/g, "/");
+        if (posixPath.startsWith(normalizedPrefix)) {
+            const rel = posixPath.slice(normalizedPrefix.length).replace(/^\//, "");
+            return rel ? path.posix.join(remoteCwd, rel) : remoteCwd;
+        }
+        // Windows path but doesn't match localPrefix — treat as relative filename only
+        const basename = path.basename(filePath);
+        return path.posix.join(remoteCwd, basename);
+    }
+
+    // Case 3: Unix absolute path — pass through directly
     if (path.posix.isAbsolute(filePath)) {
         return filePath;
     }
 
+    // Case 4: relative path — join with remote cwd
     return path.posix.join(remoteCwd, filePath);
 }
 
@@ -451,7 +473,6 @@ function registerTools(mcpServer, s, logger, onFileUpdated, reviewEdit) {
                 // Check if user modified the diff tab — use their content instead
                 var _override = consumeEditOverride(remotePath);
                 if (_override !== null) {
-                    // Read old content for file_updated callback
                     let oldText = getCachedWrite(remotePath);
                     if (oldText === null) {
                         try {
@@ -632,6 +653,11 @@ function registerTools(mcpServer, s, logger, onFileUpdated, reviewEdit) {
                 const localPrefix = getLocalCwd();
                 if (localPrefix && command.includes(localPrefix)) {
                     command = command.split(localPrefix).join(getRemoteCwd());
+                }
+                // Also handle Windows-style local paths in commands
+                const localPrefixPosix = localPrefix.replace(/\\/g, "/");
+                if (localPrefixPosix && command.includes(localPrefixPosix)) {
+                    command = command.split(localPrefixPosix).join(getRemoteCwd());
                 }
 
                 const bashCmd = `bash -c ${shellEscape(command)}`;

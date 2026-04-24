@@ -41,7 +41,6 @@ function httpsGet(url, { maxRedirects = 5, onProgress } = {}) {
             } else if (encoding === 'deflate') {
                 stream = res.pipe(zlib.createInflate());
             }
-            // For progress, use raw bytes from res (compressed size = transfer size)
             const totalBytes = parseInt(res.headers['content-length'], 10) || 0;
             let receivedBytes = 0;
             res.on('data', (c) => {
@@ -103,7 +102,7 @@ async function fetchLatestVersion() {
                 { filterType: 7, value: EXTENSION_ID }
             ]
         }],
-        flags: 0x200 | 0x1 // IncludeVersions | IncludeFiles
+        flags: 0x200 | 0x1
     };
     const result = await httpsPost(MARKETPLACE_API, body);
     const ext = result.results?.[0]?.extensions?.[0];
@@ -175,9 +174,11 @@ async function download(version, targetDir, source) {
     const versionDir = path.join(targetDir, version);
     fs.mkdirSync(versionDir, { recursive: true });
 
+    // --- CHANGED: added win32-x64 to platforms list ---
     const platforms = [
         { name: 'darwin-arm64', target: 'darwin-arm64' },
-        { name: 'linux-x64', target: 'linux-x64' }
+        { name: 'linux-x64',    target: 'linux-x64'    },
+        { name: 'win32-x64',    target: 'win32-x64'    }
     ];
 
     const results = {};
@@ -192,7 +193,6 @@ async function download(version, targetDir, source) {
             const url = getVsixUrl(version, platform.target, source);
             await downloadFile(url, vsixFile);
             await extractVsix(vsixFile, extractDir);
-            // Clean up vsix file to save space
             try { fs.unlinkSync(vsixFile); } catch (e) {}
         }
 
@@ -201,8 +201,9 @@ async function download(version, targetDir, source) {
 
     return {
         version,
-        darwinDir: results['darwin-arm64'],
-        linuxDir: results['linux-x64'],
+        darwinDir:  results['darwin-arm64'],
+        linuxDir:   results['linux-x64'],
+        win32Dir:   results['win32-x64'],          // NEW
         // Use darwin extension.js as the base for patching
         extensionJs: path.join(results['darwin-arm64'], 'extension', 'extension.js'),
         packageJson: path.join(results['darwin-arm64'], 'extension', 'package.json'),

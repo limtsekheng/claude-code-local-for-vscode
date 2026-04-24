@@ -26,11 +26,39 @@ const CONTENT_TYPES_XML = `<?xml version="1.0" encoding="utf-8"?>
   <Default Extension=".png" ContentType="image/png"/>
   <Default Extension=".md" ContentType="text/markdown"/>
   <Default Extension=".vsixmanifest" ContentType="text/xml"/>
+  <Default Extension=".exe" ContentType="application/octet-stream"/>
 </Types>`;
 
+// --- CHANGED: cross-platform zip using adm-zip instead of shell `zip` command ---
+function buildZip(stagingDir, outputPath) {
+    const AdmZip = require('adm-zip');
+    const zip = new AdmZip();
+
+    function addDir(dirPath, zipBase) {
+        for (const entry of fs.readdirSync(dirPath)) {
+            const fullPath = path.join(dirPath, entry);
+            const zipPath = zipBase ? `${zipBase}/${entry}` : entry;
+            const stat = fs.statSync(fullPath);
+            if (stat.isDirectory()) {
+                addDir(fullPath, zipPath);
+            } else {
+                const content = fs.readFileSync(fullPath);
+                zip.addFile(zipPath, content);
+            }
+        }
+    }
+
+    addDir(stagingDir, '');
+    fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+    zip.writeZip(outputPath);
+    const size = fs.statSync(outputPath).size;
+    console.log(`  VSIX: ${outputPath} (${(size / 1024 / 1024).toFixed(1)} MB)`);
+    return outputPath;
+}
+
 function buildVsix(opts) {
-    const { darwinDir, linuxDir, repoDir, outputPath } = opts;
-    const { execSync } = require('child_process');
+    // --- CHANGED: accept win32Dir ---
+    const { darwinDir, linuxDir, win32Dir, repoDir, outputPath } = opts;
 
     const stagingDir = path.join(require('os').tmpdir(), 'vsix-build-' + Date.now());
     const extDir = path.join(stagingDir, 'extension');
@@ -45,7 +73,6 @@ function buildVsix(opts) {
     // Copy extension.vsixmanifest from source VSIX
     const srcManifest = path.join(darwinDir, 'extension.vsixmanifest');
     if (fs.existsSync(srcManifest)) {
-        // Update the manifest to use our extension ID
         let manifest = fs.readFileSync(srcManifest, 'utf8');
         manifest = manifest.replace(/Id="claude-code"/g, 'Id="claude-code-local"');
         manifest = manifest.replace(/DisplayName="Claude Code"/g, 'DisplayName="Claude Code Local for VS Code"');
@@ -133,14 +160,31 @@ function buildVsix(opts) {
         fs.copyFileSync(linuxBinSrc, linuxBinDest);
     }
 
-    // Fallback binary (darwin-arm64 -> native-binary/claude)
+    // --- NEW: Windows x64 binary ---
+    if (win32Dir) {
+        const win32BinSrc  = path.join(win32Dir, 'extension', 'resources', 'native-binary',  'claude.exe');
+        const win32BinAlt  = path.join(win32Dir, 'extension', 'resources', 'native-binaries', 'win32-x64', 'claude.exe');
+        const win32BinDest = path.join(binDir, 'win32-x64', 'claude.exe');
+        fs.mkdirSync(path.dirname(win32BinDest), { recursive: true });
+        if (fs.existsSync(win32BinAlt)) {
+            fs.copyFileSync(win32BinAlt, win32BinDest);
+            console.log('  win32-x64 binary: copied from native-binaries/');
+        } else if (fs.existsSync(win32BinSrc)) {
+            fs.copyFileSync(win32BinSrc, win32BinDest);
+            console.log('  win32-x64 binary: copied from native-binary/');
+        } else {
+            console.warn('  WARNING: win32-x64 claude.exe not found in VSIX — Local Mode will not work on Windows');
+        }
+    }
+
+    // Fallback binary (darwin-arm64 -> native-binary/claude, for legacy path)
     const fallbackDest = path.join(extDir, 'resources', 'native-binary', 'claude');
     fs.mkdirSync(path.dirname(fallbackDest), { recursive: true });
     if (fs.existsSync(darwinBinDest)) {
         fs.copyFileSync(darwinBinDest, fallbackDest);
     }
 
-    // Set execute permissions on binaries
+    // Set execute permissions on Unix binaries (no-op on Windows, fine)
     for (const binPath of [darwinBinDest, linuxBinDest, fallbackDest]) {
         if (fs.existsSync(binPath)) {
             try { fs.chmodSync(binPath, 0o755); } catch (e) {
@@ -149,20 +193,13 @@ function buildVsix(opts) {
         }
     }
 
-    // Build zip using system `zip` command (preserves Unix permissions, especially +x on binaries)
+    // --- CHANGED: use adm-zip (cross-platform) instead of shell `zip` ---
     try {
         console.log('  Creating VSIX archive...');
-        fs.mkdirSync(path.dirname(outputPath), { recursive: true });
-        // Remove existing file if present (zip -r appends)
         if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
-        const absOutput = path.resolve(outputPath);
-        execSync(`cd "${stagingDir}" && zip -r -X "${absOutput}" .`, { stdio: 'pipe' });
-
-        const size = fs.statSync(outputPath).size;
-        console.log(`  VSIX: ${outputPath} (${(size / 1024 / 1024).toFixed(1)} MB)`);
+        buildZip(stagingDir, outputPath);
         return outputPath;
     } finally {
-        // Cleanup staging dir even on error
         try { fs.rmSync(stagingDir, { recursive: true, force: true }); } catch (e) {}
     }
 }
