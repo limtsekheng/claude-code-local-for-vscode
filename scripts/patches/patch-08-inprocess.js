@@ -27,24 +27,41 @@ module.exports = {
         replaceLines: 2
     },
 
-    detectVars: (ctx) => {
+    detectVars: (ctx, fullCode) => {
         // Detect the MCP server variable (x in v2.1.71, j in v2.1.42)
         const serverMatch = ctx.match(/(\w+) = \w+\(\(\w+\) => \{\s*\n\s*this\.onExperimentGatesUpdated/);
         // Detect channelId variable (z in v2.1.71, v in v2.1.42)
         const channelMatch = ctx.match(/channelId:\s*(\w+)/);
         // Detect markdown plan check function (ev in v2.1.71, Dz in v2.1.42)
         const mdCheckMatch = ctx.match(/if \((\w+)\(\w+\)\)[\s\S]*?openMarkdownPreview/);
-        // Detect permission mode param (U in v2.1.71, N in v2.1.42)
-        // It's passed to spawnClaude as the 6th arg
-        const permMatch = ctx.match(/spawnClaude\(\w+, \w+, [\s\S]*?, \w+, (\w+),/);
+        // Permission mode = launchClaude's 4th parameter (x in v2.1.150). Must be in scope at the
+        // patch site. Naive spawnClaude regex wrongly captures G from async (M, G, F).
+        const code = fullCode || ctx;
+        const launchPermMatch = code.match(/async launchClaude\(\w+,\s*\w+,\s*\w+,\s*(\w+),/);
         // Detect the getAdditionalMcpServers result var (O in v2.1.71)
         const addMcpMatch = ctx.match(/([\w$]+) = this\.getAdditionalMcpServers\(\)/);
+        // Detect module-level zod var compatible with MCP SDK (e in v2.1.71, O0 in v2.1.150).
+        // Multiple zod bundles may exist (e.g. v4 at `j`, v3 at `O0`). The MCP SDK
+        // needs the Zod v3 bundle. Find it via the MCP tool schema in Ri() —
+        // anchored on the executeCode tool definition.
+        let zodVar = 'e';
+        if (fullCode) {
+            const execMatch = fullCode.match(/executeCode[\s\S]{0,2000}?code:\s*([A-Za-z_$][\w$]*)\.string\(\)\.describe\(/);
+            if (execMatch) {
+                zodVar = execMatch[1];
+            } else {
+                // Fallback: first .string().describe usage in the file
+                const useMatch = fullCode.match(/([A-Za-z_$][\w$]*)\.string\(\)\.describe\(/);
+                if (useMatch) zodVar = useMatch[1];
+            }
+        }
         return {
             serverVar: serverMatch ? serverMatch[1] : 'x',
             channelVar: channelMatch ? channelMatch[1] : 'z',
             mdCheckFn: mdCheckMatch ? mdCheckMatch[1] : 'ev',
-            permVar: permMatch ? permMatch[1] : 'U',
-            addMcpVar: addMcpMatch ? addMcpMatch[1] : 'O'
+            permVar: launchPermMatch ? launchPermMatch[1] : 'x',
+            addMcpVar: addMcpMatch ? addMcpMatch[1] : 'O',
+            zodVar: zodVar
         };
     },
 
@@ -69,7 +86,7 @@ module.exports = {
                     // User modifications stored via setEditOverride() in RY(), consumed here.
                     var _selfIJ = this;
                     var _forceLocalAcceptAll = false;
-                    // Track runtime permission mode (permVar = initial mode from launch_claude)
+                    // Initial permission mode from launch_claude (${vars.permVar} in v2.1.150); updated via setPermissionMode.
                     var _forceLocalPermMode = ${vars.permVar} || _selfIJ.settings.getInitialPermissionMode() || "default";
                     var _origSetPermissionMode = _selfIJ.setPermissionMode.bind(_selfIJ);
                     _selfIJ.setPermissionMode = async function(_v, _z) {
@@ -129,10 +146,9 @@ module.exports = {
                             return { accepted: false };
                         }
                     };
-                    // 'e' is the module-level zod schema (var e = {}; ... string: () => ...).
-                    // Same variable used by Patch 04 (Ri/Ml WebSocket MCP). Not a local
-                    // launchClaude var — it's the bundled zod library object.
-                    _remoteTools2.registerTools(${vars.serverVar}.instance, e, this.output || this.logger, _fileUpdatedCb, _reviewEdit);
+                    // zodVar is the module-level zod schema bundle (var X = {}; ... string: () => ...).
+                    // Detected dynamically — was 'e' in v2.1.71, 'O0' in v2.1.150.
+                    _remoteTools2.registerTools(${vars.serverVar}.instance, ${vars.zodVar}, this.output || this.logger, _fileUpdatedCb, _reviewEdit);
                     (this.output || this.logger).info("forceLocal: registered remote tools on in-process MCP server. Tools: " + Object.keys(${vars.serverVar}.instance._registeredTools).length);
                 } catch (_rtErr2) {
                     (this.output || this.logger).error("forceLocal: FAILED to register remote tools on in-process MCP server: " + (_rtErr2.message || _rtErr2));

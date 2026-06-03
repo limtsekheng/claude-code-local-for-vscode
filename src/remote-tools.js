@@ -85,19 +85,82 @@ function getLocalCwd() {
 }
 
 function toRemotePath(filePath) {
+    if (!filePath || filePath === "." || filePath === "./" || filePath === ".\\") {
+        return getRemoteCwd();
+    }
+
     const localPrefix = getLocalCwd();
     const remoteCwd = getRemoteCwd();
 
-    if (filePath.startsWith(localPrefix)) {
-        const rel = filePath.slice(localPrefix.length).replace(/^[\/\\]/, "");
-        return rel ? path.posix.join(remoteCwd, rel) : remoteCwd;
+    // Normalize separators — treat \ and / as equivalent. This is the key fix
+    // for Windows agents passing backslash-absolute paths like "\foo\bar":
+    // path.posix.isAbsolute() doesn't recognize \, so unnormalized "\foo"
+    // would fall through to the relative branch and get duplicated onto
+    // remoteCwd (producing a bogus path that VS Code's remote-FS API then
+    // mis-resolves back to the local prefix).
+    const normalized = filePath.replace(/\\/g, "/");
+    const normalizedPrefix = localPrefix.replace(/\\/g, "/");
+
+    // Case A: path is the local prefix exactly, or sits underneath it.
+    if (normalized === normalizedPrefix || normalized === normalizedPrefix + "/") {
+        return remoteCwd;
+    }
+    if (normalized.startsWith(normalizedPrefix + "/")) {
+        const rel = normalized.slice(normalizedPrefix.length + 1);
+        if (!rel) return remoteCwd;
+        // Under the proxy cwd the agent often repeats the full remote path:
+        //   .../a2000-APS-jenkins-bev-huiguan/a2000/APS/jenkins/bev-huiguan/file.sh
+        // Joining rel onto remoteCwd again would double the prefix → read fails.
+        const remoteTail = remoteCwd.replace(/^\//, "");
+        if (rel === remoteTail || rel.startsWith(remoteTail + "/")) {
+            return "/" + rel;
+        }
+        return path.posix.join(remoteCwd, rel);
     }
 
-    if (path.posix.isAbsolute(filePath)) {
-        return filePath;
+    // Case B: the agent passes the local-prefix's BASENAME as a pseudo-absolute
+    // path. This happens because the CLI's cwd is shown to the agent as
+    //   C:\Users\<user>\.claude\remote\<host>\<safeRemotePath>
+    // and the agent often references the deepest segment as if it were the
+    // remote root (e.g. "/a2000-APS-jenkins-bev-huiguan" or, on Windows,
+    // "\a2000-APS-jenkins-bev-huiguan"). Map it back to the real remoteCwd.
+    const safeBasename = path.posix.basename(normalizedPrefix);
+    if (safeBasename) {
+        const rooted = "/" + safeBasename;
+        if (normalized === rooted || normalized === rooted + "/") return remoteCwd;
+        if (normalized.startsWith(rooted + "/")) {
+            const rel = normalized.slice(rooted.length + 1);
+            return rel ? path.posix.join(remoteCwd, rel) : remoteCwd;
+        }
     }
 
-    return path.posix.join(remoteCwd, filePath);
+    // Case C: Windows drive path (C:\... or C:/...) outside the local prefix.
+    // This is almost always the agent prepending the LOCAL drive letter to a
+    // REMOTE absolute path — e.g. it knows the remote root is
+    //   /a2000/APS/jenkins/bev-huiguan
+    // but emits
+    //   C:/a2000/APS/jenkins/bev-huiguan/bev/tools/score_threshold.py
+    // because the CLI's apparent cwd lives on the C: drive. Strip the drive
+    // letter and treat the remainder as a real posix-absolute remote path.
+    // (Genuine proxy paths under the local prefix are already handled by Case A
+    // above, so anything reaching here is a spurious drive prefix.)
+    //
+    // NOTE: the previous behaviour projected onto remoteCwd by basename only,
+    // which silently dropped intermediate directories (".../bev/tools/foo.py"
+    // became ".../foo.py") and produced a non-existent path → read failures.
+    if (/^[a-zA-Z]:\//.test(normalized)) {
+        const stripped = normalized.slice(2); // remove "C:" → "/a2000/.../foo.py"
+        return stripped.startsWith("/") ? stripped : "/" + stripped;
+    }
+
+    // Case D: posix-absolute path that's not the local prefix — pass through
+    // as a real remote path (e.g. /etc/hosts).
+    if (normalized.startsWith("/")) {
+        return normalized;
+    }
+
+    // Case E: relative — join with remote cwd.
+    return path.posix.join(remoteCwd, normalized);
 }
 
 function getRemoteUri(filePath) {
@@ -451,7 +514,6 @@ function registerTools(mcpServer, s, logger, onFileUpdated, reviewEdit) {
                 // Check if user modified the diff tab — use their content instead
                 var _override = consumeEditOverride(remotePath);
                 if (_override !== null) {
-                    // Read old content for file_updated callback
                     let oldText = getCachedWrite(remotePath);
                     if (oldText === null) {
                         try {
@@ -633,6 +695,21 @@ function registerTools(mcpServer, s, logger, onFileUpdated, reviewEdit) {
                 if (localPrefix && command.includes(localPrefix)) {
                     command = command.split(localPrefix).join(getRemoteCwd());
                 }
+                // Also handle Windows-style local paths in commands
+                const localPrefixPosix = localPrefix.replace(/\\/g, "/");
+                if (localPrefixPosix && command.includes(localPrefixPosix)) {
+                    command = command.split(localPrefixPosix).join(getRemoteCwd());
+                }
+
+                // Strip spurious Windows drive prefixes the agent sometimes
+                // prepends to REMOTE absolute paths, e.g.
+                //   cat "C:/a2000/.../score_threshold.py"
+                // The command always runs on the REMOTE (posix) host, so any
+                // "<drive>:/" or "<drive>:\\" at a token boundary is bogus —
+                // turn it back into a plain "/" rooted path. The leading capture
+                // group preserves whatever delimiter (quote, space, =, (, start)
+                // preceded the drive letter so we don't merge adjacent tokens.
+                command = command.replace(/(^|[\s"'=(`])([A-Za-z]):[\\/]/g, "$1/");
 
                 const bashCmd = `bash -c ${shellEscape(command)}`;
 

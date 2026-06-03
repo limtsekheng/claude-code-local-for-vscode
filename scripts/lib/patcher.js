@@ -166,7 +166,7 @@ function applyPatch(code, patchDef, dryRun) {
 
     // Detect variable names from context
     const contextText = getContext(lines, anchorLine, patchDef.insertAt.contextRange || 100);
-    const vars = patchDef.detectVars ? patchDef.detectVars(contextText) : {};
+    const vars = patchDef.detectVars ? patchDef.detectVars(contextText, code) : {};
 
     if (dryRun) {
         result.success = true;

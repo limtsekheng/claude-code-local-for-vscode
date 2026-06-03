@@ -5,7 +5,7 @@
  * Three insertions in the getHtmlForWebview template:
  *  1. CSS after :root { } block
  *  2. Variables after window.IS_SIDEBAR line
- *  3. Badge injection script after the variables
+ *  3. Badge injection script after the variables block
  */
 module.exports = [
     {
@@ -16,13 +16,13 @@ module.exports = [
 
         anchor: {
             pattern: /--vscode-chat-font-family:/,
-            context: /getHtmlForWebview|<\/style>/,
+            context: /<\/style>|vscode-editor-font-family/,
+            contextRange: 30,
             hint: ':root CSS variables in getHtmlForWebview template'
         },
 
         insertAt: {
-            searchRange: 10,
-            // The </style> closing tag after :root CSS
+            searchRange: 40,
             pattern: /<\/style>/,
             relation: 'before'
         },
@@ -54,7 +54,8 @@ module.exports = [
 
         anchor: {
             pattern: /window\.IS_SIDEBAR/,
-            context: /initialConfiguration|initialPrompt/,
+            context: /data-initial-prompt|IS_FULL_EDITOR|initialPrompt|initialConfiguration/,
+            contextRange: 30,
             hint: 'window.IS_SIDEBAR in webview script block'
         },
 
@@ -76,24 +77,24 @@ module.exports = [
 
         appliedCheck: /__force-local-badge/,
 
-        // Note: depends on patch-15b being applied first (dry-run may report failure)
-        dependsOn: 'patch-15b',
-
+        // --- CHANGED: use IS_SIDEBAR anchor instead of FORCE_LOCAL_MODE
+        // so this patch works even in dry-run (before patch-15b is applied).
+        // IS_SIDEBAR is guaranteed to be in the original source. ---
         anchor: {
-            pattern: /window\.FORCE_LOCAL_MODE/,
-            context: /IS_SIDEBAR/,
-            hint: 'After window.FORCE_LOCAL_MODE variable injection (from patch-15b)'
+            pattern: /window\.IS_SIDEBAR/,
+            context: /data-initial-prompt|IS_FULL_EDITOR|initialPrompt|initialConfiguration/,
+            contextRange: 30,
+            hint: 'window.IS_SIDEBAR in webview script block (same block as patch-15b)'
         },
 
         insertAt: {
-            searchRange: 10,
-            // After the closing </script> of the variables block
+            searchRange: 20,
+            // Find the </script> closing tag of the variables block
             pattern: /<\/script>/,
             relation: 'after'
         },
 
         detectVars: (ctx) => {
-            // Find the nonce variable
             const nonceMatch = ctx.match(/nonce="\$\{(\w+)\}"/);
             return {
                 nonceVar: nonceMatch ? nonceMatch[1] : 'B'

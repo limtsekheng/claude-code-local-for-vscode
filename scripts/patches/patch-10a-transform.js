@@ -4,8 +4,16 @@
  * Patch 10A: Transform MCP tool names to built-in names for webview rendering.
  * Two parts:
  *  1. Insert the _transformForWebview function before the for-await loop
- *  2. Replace the loop body to use _transformForWebview
+ *  2. Inject a reassignment line at the top of the loop body so all downstream
+ *     code (system check, this.send, post-processor) sees transformed messages.
+ *
+ * v2.1.150 note: the loop body changed from a one-liner
+ *   `for await (let A of q) this.send({...}), jP(A)`
+ * to a multi-line block with a bridge_state filter before this.send. So we
+ * no longer replace the loop body; we just inject one line at the top.
  */
+
+const FOR_AWAIT_OPEN = /for await \(let \w+ of \w+\) \{?\s*$/;
 
 const patch10aFunc = {
     id: 'patch-10a',
@@ -14,15 +22,17 @@ const patch10aFunc = {
     appliedCheck: /_transformForWebview/,
 
     anchor: {
-        // The for-await loop that sends io_messages in launchClaude
-        pattern: /for await \(let \w+ of \w+\) this\.send\(\{/,
+        // The for-await loop that sends io_messages in launchClaude.
+        // In v2.1.150 the body is multi-line, so the opening is just `... ) {`.
+        pattern: FOR_AWAIT_OPEN,
         context: /io_message/,
+        contextRange: 30,
         hint: 'for-await loop in launchClaude that sends io_messages'
     },
 
     insertAt: {
         searchRange: 5,
-        pattern: /for await \(let \w+ of \w+\) this\.send\(\{/,
+        pattern: FOR_AWAIT_OPEN,
         relation: 'before'
     },
 
@@ -30,9 +40,9 @@ const patch10aFunc = {
         const forMatch = ctx.match(/for await \(let (\w+) of (\w+)\)/);
         const chMatch = ctx.match(/channelId:\s*(\w+)/);
         return {
-            iterVar: forMatch ? forMatch[1] : 'D',
-            queryVar: forMatch ? forMatch[2] : 'J',
-            channelVar: chMatch ? chMatch[1] : 'v'
+            iterVar: forMatch ? forMatch[1] : 'A',
+            queryVar: forMatch ? forMatch[2] : 'M',
+            channelVar: chMatch ? chMatch[1] : 'z'
         };
     },
 
@@ -76,45 +86,31 @@ const patch10aLoop = {
     id: 'patch-10a-loop',
     name: 'io_message loop body transform',
 
-    appliedCheck: /var _D = _transformForWebview/,
+    // After patch-10a-func runs, _transformForWebview exists. We further mark
+    // that the reassignment is in place via a comment marker.
+    appliedCheck: /_FL_XFORM_LOOP_/,
 
     anchor: {
-        // The for-await line that sends io_messages (may be single-line or multi-line)
-        pattern: /for await \(let \w+ of \w+\) this\.send\(\{/,
+        pattern: FOR_AWAIT_OPEN,
         context: /io_message/,
+        contextRange: 30,
         hint: 'for-await loop sending io_messages'
     },
 
     insertAt: {
         searchRange: 5,
-        pattern: /for await \(let \w+ of \w+\) this\.send\(\{/,
-        relation: 'replace',
-        replaceLines: 6  // replace the for-await + this.send block
+        pattern: FOR_AWAIT_OPEN,
+        relation: 'after'
     },
 
     detectVars: (ctx) => {
         const forMatch = ctx.match(/for await \(let (\w+) of (\w+)\)/);
-        const chMatch = ctx.match(/channelId:\s*(\w+)/);
-        // Detect post-processor function (jP in v2.1.71, sb in v2.1.42)
-        const postMatch = ctx.match(/\), (\w+)\(\w+\);/);
         return {
-            iterVar: forMatch ? forMatch[1] : 'G',
-            queryVar: forMatch ? forMatch[2] : 'q',
-            channelVar: chMatch ? chMatch[1] : 'z',
-            postFn: postMatch ? postMatch[1] : 'jP'
+            iterVar: forMatch ? forMatch[1] : 'A'
         };
     },
 
-    generate: (vars) => `                    for await (let ${vars.iterVar} of ${vars.queryVar}) {
-                        var _${vars.iterVar} = _transformForWebview(${vars.iterVar});
-                        this.send({
-                            type: "io_message",
-                            channelId: ${vars.channelVar},
-                            message: _${vars.iterVar},
-                            done: !1
-                        });
-                        ${vars.postFn}(_${vars.iterVar});
-                    }`
+    generate: (vars) => `                            /* _FL_XFORM_LOOP_ */ ${vars.iterVar} = _transformForWebview(${vars.iterVar});`
 };
 
 module.exports = [patch10aFunc, patch10aLoop];

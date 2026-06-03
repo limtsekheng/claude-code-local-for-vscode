@@ -225,9 +225,12 @@ function testPatchedStructure() {
         // if iterVar=D. In v2.1.71 iterVar=G → "var _G = _transformForWebview".
         // Check for the generic pattern instead.
         if (p.id === 'patch-10a-loop') {
+            // v2.1.150+: marker is the comment-tagged reassignment inside the loop body.
+            // Accept either form for backwards compat.
             assert(`applied marker [${p.id}]`,
-                /var _\w+ = _transformForWebview/.test(code),
-                'Expected "var _X = _transformForWebview" pattern');
+                /var _\w+ = _transformForWebview/.test(code) ||
+                /_FL_XFORM_LOOP_.*= _transformForWebview/.test(code),
+                'Expected loop transform marker (either old var form or _FL_XFORM_LOOP_)');
         } else {
             assert(`applied marker [${p.id}]`,
                 p.appliedCheck.test(code),
@@ -259,50 +262,49 @@ function testZodVariable() {
     const code = fs.readFileSync(PATCHED_EXT, 'utf8');
     const lines = code.split('\n');
 
-    // Find module-level zod: var e = {}; followed by string: () => ...
-    const zodDefLine = lines.findIndex(l => /^var e = \{\};$/.test(l.trim()));
-    assert('module-level zod "e" exists',
+    // Detect the MCP-compatible zod var dynamically. Was `e` in v2.1.71, `O0` in v2.1.150.
+    // The MCP SDK uses Zod v3 style — find the var from `X.string().describe(`.
+    const execMatch = code.match(/executeCode[\s\S]{0,2000}?code:\s*([A-Za-z_$][\w$]*)\.string\(\)\.describe\(/);
+    const expectedZod = execMatch ? execMatch[1] : 'e';
+
+    // Verify the module-level bundle for that var exists
+    const zodDefLine = lines.findIndex(l => new RegExp(`^var ${expectedZod} = \\{\\};$`).test(l.trim()));
+    assert(`module-level zod "${expectedZod}" exists`,
         zodDefLine !== -1,
-        `Expected "var e = {};" at module level`);
+        `Expected "var ${expectedZod} = {};" at module level`);
 
     if (zodDefLine !== -1) {
-        // Check that next few lines contain zod exports (lazy: `string: () => ...`)
         const nextLines = lines.slice(zodDefLine, zodDefLine + 30).join('\n');
-        assert('zod "e" has string/number/object exports',
+        assert(`zod "${expectedZod}" has string/number/object exports`,
             nextLines.includes('string:') && nextLines.includes('number:') && nextLines.includes('object:'),
-            'Expected zod-like exports near var e = {}');
+            `Expected zod-like exports near var ${expectedZod} = {}`);
     }
 
-    // Patch 08: registerTools must use "e" (module-level zod), NOT "s" or "N"
+    // Patch 08: registerTools must use the MCP-compatible zod var
     const registerLine = lines.find(l => l.includes('_remoteTools2.registerTools('));
     assert('Patch 08 registerTools found',
         !!registerLine,
         'Expected _remoteTools2.registerTools call');
 
     if (registerLine) {
-        // Extract the second argument (zod param)
         const match = registerLine.match(/_remoteTools2\.registerTools\(\w+\.instance,\s*(\w+),/);
-        assert('Patch 08 zod argument is "e" (module-level)',
-            match && match[1] === 'e',
-            `Expected "e" but got "${match ? match[1] : 'NOT FOUND'}"`);
+        assert(`Patch 08 zod argument is "${expectedZod}" (MCP-compatible)`,
+            match && match[1] === expectedZod,
+            `Expected "${expectedZod}" but got "${match ? match[1] : 'NOT FOUND'}"`);
 
-        // Verify it's NOT the old broken values
         assert('Patch 08 zod is NOT "s" (v2.1.42 hardcode)',
             !match || match[1] !== 's',
             'Bug: still using hardcoded "s" from v2.1.42');
-        assert('Patch 08 zod is NOT "N" ($1 stream, not zod)',
-            !match || match[1] !== 'N',
-            'Bug: "N" is new $1 (stream class), not zod');
     }
 
-    // Patch 04: registerTools should also use "e" for WebSocket server
+    // Patch 04: registerTools should also use the same zod var
     const wsRegisterLine = lines.find(l =>
         l.includes('_remoteTools.registerTools(') && !l.includes('_remoteTools2'));
     if (wsRegisterLine) {
         const match = wsRegisterLine.match(/_remoteTools\.registerTools\(\w+,\s*(\w+),/);
-        assert('Patch 04 zod argument is "e"',
-            match && match[1] === 'e',
-            `Expected "e" but got "${match ? match[1] : 'NOT FOUND'}"`);
+        assert(`Patch 04 zod argument is "${expectedZod}"`,
+            match && match[1] === expectedZod,
+            `Expected "${expectedZod}" but got "${match ? match[1] : 'NOT FOUND'}"`);
     } else {
         skip('Patch 04 registerTools check', 'WebSocket registerTools line not found');
     }
@@ -397,7 +399,8 @@ function testFullPipelineDryRun() {
             if (!p.appliedCheck) continue;
             // patch-10a-loop uses version-dependent var name
             if (p.id === 'patch-10a-loop') {
-                if (!/var _\w+ = _transformForWebview/.test(code)) {
+                if (!/var _\w+ = _transformForWebview/.test(code) &&
+                    !/_FL_XFORM_LOOP_.*= _transformForWebview/.test(code)) {
                     allPresent = false;
                     missing.push(p.id);
                 }
@@ -477,15 +480,27 @@ function testCrossPatchConsistency() {
         }
     }
 
-    // Patch 03 disallowedTools should list 8 built-in tools
+    // Patch 03: toolAliases route built-ins to MCP; WebFetch disallowed (not Read)
+    const aliasMatch = code.match(/toolAliases\s*=\s*Object\.assign/);
+    assert('Patch 03 sets toolAliases', !!aliasMatch);
+    assert('Patch 03 aliases Read to mcp read_file',
+        code.includes('Read: "mcp__claude-vscode__read_file"'));
     const disallowedMatch = code.match(/disallowedTools\s*=\s*\[([\s\S]*?)\]/);
     if (disallowedMatch) {
-        const builtins = ['Read', 'Write', 'Edit', 'MultiEdit', 'Glob', 'Grep', 'Bash', 'NotebookEdit'];
-        for (const t of builtins) {
-            assert(`Patch 03 disallowedTools includes "${t}"`,
-                disallowedMatch[1].includes(`"${t}"`));
-        }
+        assert('Patch 03 disallows WebFetch',
+            disallowedMatch[1].includes('"WebFetch"'));
+        assert('Patch 03 does NOT disallow Read (uses toolAliases instead)',
+            !disallowedMatch[1].includes('"Read"'));
     }
+    assert('Patch 03 exempts claude-vscode MCP for subagents',
+        code.includes('webSearchIsolationExemptMcpServers') &&
+        code.includes('"claude-vscode"'));
+    assert('Patch 03 rewrites paths via PreToolUse updatedInput',
+        code.includes('_forceLocalRewritePaths') &&
+        code.includes('updatedInput: updated'));
+    assert('Patch 03 blocks Agent subagent file-read with prefetch',
+        code.includes('_forceLocalBlockAgentRead') &&
+        code.includes('matcher: "Agent|Task"'));
 
     // isForceLocalMode() should be called consistently
     const forceLocalCalls = (code.match(/isForceLocalMode\(\)/g) || []).length;
@@ -537,12 +552,16 @@ function testInstalledExtension() {
         assert(`installed: ${f} exists`, fs.existsSync(fp));
     }
 
-    // Verify the installed extension.js has the zod fix
+    // Verify the installed extension.js has the zod fix.
+    // The expected zod var name is version-dependent (e in v2.1.71, O0 in v2.1.150).
+    // Detect it from the MCP-tool usage pattern in the same file.
     const installedExt = fs.readFileSync(path.join(installedDir, 'extension.js'), 'utf8');
+    const installedExec = installedExt.match(/executeCode[\s\S]{0,2000}?code:\s*([A-Za-z_$][\w$]*)\.string\(\)\.describe\(/);
+    const installedExpected = installedExec ? installedExec[1] : 'e';
     const registerLine = installedExt.match(/_remoteTools2\.registerTools\(\w+\.instance,\s*(\w+),/);
-    assert('installed ext: Patch 08 zod = "e"',
-        registerLine && registerLine[1] === 'e',
-        `Expected "e", got "${registerLine ? registerLine[1] : 'NOT FOUND'}"`);
+    assert(`installed ext: Patch 08 zod = "${installedExpected}"`,
+        registerLine && registerLine[1] === installedExpected,
+        `Expected "${installedExpected}", got "${registerLine ? registerLine[1] : 'NOT FOUND'}"`);
 
     // Verify package.json
     const pkg = JSON.parse(fs.readFileSync(path.join(installedDir, 'package.json'), 'utf8'));

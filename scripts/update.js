@@ -3,6 +3,7 @@
 
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 
 const REPO_DIR = path.resolve(__dirname, '..');
 
@@ -144,7 +145,6 @@ async function main() {
 
     if (opts.skipDownload) {
         console.log('\n--- Step 1: Using cached files ---');
-        // Find the most recent version in cache
         if (!fs.existsSync(cacheDir)) {
             console.error('Error: No cache directory found. Run without --skip-download first.');
             process.exit(1);
@@ -162,10 +162,12 @@ async function main() {
             console.error(`Error: Version ${version} not found in cache.`);
             process.exit(1);
         }
+        const win32Dir = path.join(versionDir, 'win32-x64');
         sourceInfo = {
             version,
-            darwinDir: path.join(versionDir, 'darwin-arm64'),
-            linuxDir: path.join(versionDir, 'linux-x64'),
+            darwinDir:  path.join(versionDir, 'darwin-arm64'),
+            linuxDir:   path.join(versionDir, 'linux-x64'),
+            win32Dir:   fs.existsSync(win32Dir) ? win32Dir : null,   // NEW
             extensionJs: path.join(versionDir, 'darwin-arm64', 'extension', 'extension.js'),
             packageJson: path.join(versionDir, 'darwin-arm64', 'extension', 'package.json'),
             extensionDir: path.join(versionDir, 'darwin-arm64', 'extension')
@@ -214,20 +216,22 @@ async function main() {
     console.log('\n--- Step 4: Patch package.json ---');
     const { patchPackageJson } = require('./lib/package-patcher');
     const repoPkgPath = path.join(REPO_DIR, 'package.json');
-
-    // Copy fresh package.json from source, then patch it
     fs.copyFileSync(sourceInfo.packageJson, repoPkgPath);
     patchPackageJson(repoPkgPath);
 
     // Step 5: Build VSIX
     console.log('\n--- Step 5: Build VSIX ---');
     const { buildVsix } = require('./lib/vsix-builder');
-    const outputPath = opts.outputPath || `/tmp/claude-code-local-${sourceInfo.version}.vsix`;
+
+    // --- CHANGED: default output path is cross-platform (Desktop or home dir) ---
+    const defaultOutput = path.join(os.homedir(), `claude-code-local-${sourceInfo.version}.vsix`);
+    const outputPath = opts.outputPath || defaultOutput;
 
     buildVsix({
         darwinDir: sourceInfo.darwinDir,
-        linuxDir: sourceInfo.linuxDir,
-        repoDir: REPO_DIR,
+        linuxDir:  sourceInfo.linuxDir,
+        win32Dir:  sourceInfo.win32Dir,    // NEW
+        repoDir:   REPO_DIR,
         outputPath
     });
 
@@ -240,7 +244,9 @@ async function main() {
         try {
             execSync(`code --install-extension "${outputPath}" --force`, { stdio: 'inherit' });
             console.log('Extension installed successfully.');
-            console.log('Restart VS Code with: --enable-proposed-api justimyhxu.claude-code-local');
+            console.log('\nNext: restart VS Code and enable the proposed API.');
+            console.log('Add to %APPDATA%\\Code\\User\\argv.json:');
+            console.log('  { "enable-proposed-api": ["justimyhxu.claude-code-local"] }');
         } catch (e) {
             console.error('Install failed:', e.message);
             process.exit(1);
@@ -250,8 +256,13 @@ async function main() {
     // Summary
     console.log('\n' + '='.repeat(50));
     console.log('DONE');
-    console.log(`  Version: ${sourceInfo.version}`);
-    console.log(`  VSIX: ${outputPath}`);
+    console.log(`  Version:  ${sourceInfo.version}`);
+    console.log(`  VSIX:     ${outputPath}`);
+    if (sourceInfo.win32Dir) {
+        console.log('  win32-x64 binary: included ✓');
+    } else {
+        console.log('  win32-x64 binary: NOT included (Local Mode will not work on Windows)');
+    }
     if (failCount > 0) {
         console.log(`  WARNING: ${failCount} patch(es) failed`);
         process.exit(1);
