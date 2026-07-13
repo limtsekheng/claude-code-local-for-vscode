@@ -310,10 +310,20 @@ fallback paths. `detectVars` includes `pathAlias` (detected from `P4.isAbsolute`
 
 **Default: VS Code Hidden Terminal** (no separate SSH needed)
 - Creates a hidden `vscode.window.createTerminal({ hideFromUser: true })`
-- Sends commands with output capture: `(cd CWD && CMD) > /tmp/.out 2> /tmp/.err; echo $? > /tmp/.exit`
+- Sends commands with output capture:
+ `(cd CWD && timeout N bash -c 'CMD') > /tmp/.out 2> /tmp/.err; echo $? > /tmp/.exit`
+ (remote-side `timeout` = local timeout − 5s, so a runaway command kills itself
+ and writes exit code 124 before local polling gives up)
 - Polls for completion via `vscode.workspace.fs.readFile()` on exit file
 - Reads stdout/stderr from temp files
 - Uses VS Code's existing authenticated remote connection
+- **Terminal lifecycle**: dead shells detected via `terminal.exitStatus` +
+ `onDidCloseTerminal` (a dead pty swallows `sendText` silently); readiness
+ probe retries once with a fresh terminal; local timeout disposes the terminal
+ so the next exec gets a fresh shell instead of queueing behind a stuck one
+- **Serialization**: all `remoteExec` calls run through a promise-chain queue —
+ the shared terminal executes commands in the foreground, so concurrent
+ `sendText` would corrupt both commands
 - **Debug logging**: "Claude Remote Exec" Output channel (`dbg()` helper) logs all
   execution steps with timestamps — terminal creation, probe-based readiness checks,
   command dispatch, polling progress (throttled to every 3s), stdout/stderr sizes,
@@ -332,7 +342,16 @@ after writes. Both `edit_file` and `write_file` cache content after writing;
 ### grep Fallback
 
 Tries `rg` (ripgrep) first. If exit code 127 or "command not found", automatically
-falls back to `grep -rn`. This handles remote servers without ripgrep installed.
+falls back to `LC_ALL=C grep -EnI -D skip` (+ `-r --exclude-dir=...` for directory
+searches). This handles remote servers without ripgrep installed:
+- `LC_ALL=C` — multibyte locales make grep dramatically (50-100x) slower
+- `-E` — rg patterns are ERE; default BRE would treat `(a|b)` literally (0 matches)
+- `-I` / `-D skip` — skip binary files, don't block on FIFOs/devices
+- `--exclude-dir` — .git, node_modules, __pycache__, venvs, .tox, .cache
+
+If the `path` argument is a FILE (the CLI often passes one), the tool cds to its
+parent directory and searches just that file — using the file as cwd would fail
+with "cd: Not a directory".
 
 ### file_updated Integration
 
@@ -461,10 +480,32 @@ The `_adaptMcpEvent()` helper converts MCP events to native-format events:
     - Fix: Added Patch 16 with forceLocal early-return using `getRemoteUri()`.
 
 15. **Relative file paths (e.g. `checkpoint.py`) fail to open in forceLocal mode**
-    - Root cause: `getRemoteUri()` constructs wrong URI for relative paths — the remote
-      workspace root is prepended but the file may be in a subdirectory.
-    - Fix: Added `.catch()` fallback in Patch 16 that uses `a$()` (`workspace.findFiles`)
-      to search the remote workspace, then retries `showTextDocument` with the found URI.
+ - Root cause: `getRemoteUri()` constructs wrong URI for relative paths — the remote
+ workspace root is prepended but the file may be in a subdirectory.
+ - Fix: Added `.catch()` fallback in Patch 16 that uses `a$()` (`workspace.findFiles`)
+ to search the remote workspace, then retries `showTextDocument` with the found URI.
+
+16. **Cascading 120s timeouts: dead hidden terminal reused forever**
+ - Symptom: from some point on, EVERY bash/grep tool call times out after 120s,
+ even trivial ones (`ls`, single-file grep). Debug log shows exit file
+ "nonexistent" from first poll to timeout — commands never executed at all
+ (verified: no `/tmp/.claude_exec_*` files were ever created on the remote).
+ - Root cause 1: `getRemoteTerminal()` checked `_remoteTerminal._isDisposed`,
+ which is NOT a real VS Code API property (always `undefined`) — a terminal
+ whose shell died (SSH reconnect, remote TMOUT, VS Code Server restart) was
+ reused forever. `sendText` to a dead pty is silently swallowed.
+ - Root cause 2: on timeout, `kill %1` was sent to the same (busy or dead)
+ terminal — either queued as stdin behind the stuck foreground command or
+ swallowed entirely. A genuinely slow command (e.g. repo-wide `grep -rn` on
+ network FS without rg) thus blocked all subsequent commands in the pty
+ input buffer, each timing out in turn.
+ - Fix: (a) liveness via `terminal.exitStatus === undefined` + `onDidCloseTerminal`
+ listener that nulls the cached terminal; (b) readiness probe retries once with
+ a fresh terminal before proceeding; (c) local timeout now `dispose()`s the
+ terminal so the next exec starts clean; (d) remote-side `timeout N bash -c`
+ wrapper reaps runaway processes (exit 124) before local polling gives up;
+ (e) `remoteExec` serialized via promise-chain queue; (f) grep fallback uses
+ `grep -rnI` with `--exclude-dir` for .git/node_modules/__pycache__/venv/etc.
 
 ## Progress
 

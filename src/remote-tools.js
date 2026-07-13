@@ -198,13 +198,28 @@ function dbg(msg) {
 let _remoteTerminal = null;
 let _terminalReady = false;
 let _execCounter = 0;
+let _terminalCloseListener = null;
+let _execQueue = Promise.resolve(); // serializes remoteExec calls on the shared terminal
 
 function getRemoteTerminal() {
-    if (_remoteTerminal && !_remoteTerminal._isDisposed) {
+    // The hidden terminal's shell can die silently (SSH reconnect, remote TMOUT,
+    // VS Code Server restart). Detect that via exitStatus + onDidCloseTerminal —
+    // a dead terminal swallows sendText with no error, so every subsequent
+    // command would "time out" while never having executed at all.
+    if (!_terminalCloseListener) {
+        _terminalCloseListener = vscode.window.onDidCloseTerminal((t) => {
+            if (t === _remoteTerminal) {
+                dbg("onDidCloseTerminal: hidden exec terminal closed — will recreate on next use");
+                _remoteTerminal = null;
+                _terminalReady = false;
+            }
+        });
+    }
+    if (_remoteTerminal && _remoteTerminal.exitStatus === undefined) {
         dbg("getRemoteTerminal: reusing existing terminal");
         return _remoteTerminal;
     }
-    dbg(`getRemoteTerminal: creating new hidden terminal (old disposed: ${_remoteTerminal ? 'yes' : 'first call'})`);
+    dbg(`getRemoteTerminal: creating new hidden terminal (${_remoteTerminal ? 'old shell exited' : 'first call'})`);
     _remoteTerminal = vscode.window.createTerminal({
         name: "Claude Code Remote Exec",
         hideFromUser: true,
@@ -214,24 +229,41 @@ function getRemoteTerminal() {
     return _remoteTerminal;
 }
 
-async function remoteExec(command, cwd, timeoutMs = 120000) {
-    const id = `${Date.now()}_${++_execCounter}`;
-    const tmpBase = `/tmp/.claude_exec_${id}`;
-    const terminal = getRemoteTerminal();
+function discardTerminal(reason) {
+    dbg(`discardTerminal: ${reason}`);
+    if (_remoteTerminal) {
+        try { _remoteTerminal.dispose(); } catch (_) {}
+    }
+    _remoteTerminal = null;
+    _terminalReady = false;
+}
 
-    dbg(`[${id}] remoteExec START — cwd=${cwd}, timeout=${timeoutMs}ms, cmd=${command.slice(0, 200)}${command.length > 200 ? '...' : ''}`);
+function remoteExec(command, cwd, timeoutMs = 120000) {
+    // Serialize all executions: the shared terminal runs commands in the
+    // foreground, so a second sendText while one is running would just queue
+    // raw text into the pty input buffer and corrupt the timing of both.
+    const run = _execQueue.then(() => _remoteExecNow(command, cwd, timeoutMs));
+    _execQueue = run.catch(() => {});
+    return run;
+}
 
-    if (!_terminalReady) {
-        dbg(`[${id}] terminal not ready — sending readiness probe`);
-        const probeFile = `/tmp/.claude_ready_${id}`;
-        const probeToken = `READY_${id}`;
+async function _probeTerminal(id) {
+    const probeFile = `/tmp/.claude_ready_${id}`;
+    const probeToken = `READY_${id}`;
+    const probeUri = getRemoteUri(probeFile);
+    const probeTimeout = 5000;
+
+    // Two attempts: if the current terminal's shell is dead (probe never
+    // answers), discard it and try once more with a fresh terminal.
+    for (let attempt = 1; attempt <= 2; attempt++) {
+        const terminal = getRemoteTerminal();
+        if (_terminalReady) return terminal;
+
+        dbg(`[${id}] terminal not ready — sending readiness probe (attempt ${attempt})`);
         terminal.sendText(`echo ${probeToken} > ${probeFile}`, true);
 
-        const probeUri = getRemoteUri(probeFile);
         const probeStart = Date.now();
-        const probeTimeout = 5000;
         let probeOk = false;
-
         while (Date.now() - probeStart < probeTimeout) {
             await new Promise(r => setTimeout(r, 200));
             try {
@@ -248,17 +280,36 @@ async function remoteExec(command, cwd, timeoutMs = 120000) {
             }
         }
 
-        if (!probeOk) {
-            dbg(`[${id}] readiness probe FAILED after ${probeTimeout}ms — proceeding anyway`);
+        if (probeOk) {
+            terminal.sendText(`rm -f ${probeFile}`, true);
+            _terminalReady = true;
+            return terminal;
         }
 
-        // Clean up probe file
-        terminal.sendText(`rm -f ${probeFile}`, true);
-        _terminalReady = true;
+        dbg(`[${id}] readiness probe FAILED after ${probeTimeout}ms (attempt ${attempt})`);
+        discardTerminal(`probe failed — shell dead or unresponsive (attempt ${attempt})`);
     }
 
+    // Last resort: fresh terminal, proceed unprobed (previous behavior)
+    dbg(`[${id}] proceeding with unprobed fresh terminal`);
+    return getRemoteTerminal();
+}
+
+async function _remoteExecNow(command, cwd, timeoutMs = 120000) {
+    const id = `${Date.now()}_${++_execCounter}`;
+    const tmpBase = `/tmp/.claude_exec_${id}`;
+
+    dbg(`[${id}] remoteExec START — cwd=${cwd}, timeout=${timeoutMs}ms, cmd=${command.slice(0, 200)}${command.length > 200 ? '...' : ''}`);
+
+    const terminal = await _probeTerminal(id);
+
+    // Remote-side timeout: ensure the process dies on the remote BEFORE we give
+    // up polling locally, so the exit file always gets written (code 124) and
+    // the terminal can't be occupied forever by a runaway command.
+    const remoteTimeoutSec = Math.max(5, Math.ceil(timeoutMs / 1000) - 5);
     const cdPart = cwd ? `cd ${shellEscape(cwd)} && ` : "";
-    const fullCmd = `(${cdPart}${command}) > ${tmpBase}.out 2> ${tmpBase}.err; echo $? > ${tmpBase}.exit`;
+    const wrapped = `timeout ${remoteTimeoutSec} bash -c ${shellEscape(command)}`;
+    const fullCmd = `(${cdPart}${wrapped}) > ${tmpBase}.out 2> ${tmpBase}.err; echo $? > ${tmpBase}.exit`;
     dbg(`[${id}] sending command to terminal: ${fullCmd.slice(0, 300)}${fullCmd.length > 300 ? '...' : ''}`);
     terminal.sendText(fullCmd, true);
 
@@ -298,6 +349,10 @@ async function remoteExec(command, cwd, timeoutMs = 120000) {
 
             terminal.sendText(`rm -f ${tmpBase}.out ${tmpBase}.err ${tmpBase}.exit`, true);
 
+            if (exitCode === 124 && !stderr) {
+                stderr = `Command was killed by remote-side timeout after ${remoteTimeoutSec}s`;
+            }
+
             dbg(`[${id}] remoteExec DONE — exitCode=${isNaN(exitCode) ? 1 : exitCode}, total=${Date.now() - startTime}ms`);
             return { stdout, stderr, exitCode: isNaN(exitCode) ? 1 : exitCode };
         } catch (pollErr) {
@@ -309,8 +364,12 @@ async function remoteExec(command, cwd, timeoutMs = 120000) {
         }
     }
 
-    dbg(`[${id}] TIMEOUT after ${timeoutMs}ms — killing`);
-    terminal.sendText(`kill %1 2>/dev/null; rm -f ${tmpBase}.out ${tmpBase}.err ${tmpBase}.exit`, true);
+    dbg(`[${id}] TIMEOUT after ${timeoutMs}ms — discarding terminal`);
+    // The shell is either dead or occupied by a stuck command; sendText (e.g.
+    // "kill %1") would just be swallowed by the pty input buffer. Dispose the
+    // terminal so the next exec gets a fresh shell instead of queueing behind
+    // this one. The remote `timeout` wrapper reaps the runaway process itself.
+    discardTerminal(`exec ${id} timed out after ${timeoutMs}ms`);
     throw new Error(`Command timed out after ${timeoutMs}ms`);
 }
 
@@ -629,7 +688,20 @@ function registerTools(mcpServer, s, logger, onFileUpdated, reviewEdit) {
         },
         async ({ pattern, path: searchPath, include, context, max_results }) => {
             try {
-                const cwd = toRemotePath(searchPath || getRemoteCwd());
+                const target = toRemotePath(searchPath || getRemoteCwd());
+
+                // The CLI often passes a FILE as `path`. Using it as cwd would
+                // fail ("cd: Not a directory") — search the file from its
+                // parent directory instead.
+                let cwd = target;
+                let fileArg = null;
+                try {
+                    const st = await vscode.workspace.fs.stat(getRemoteUri(target));
+                    if ((st.type & vscode.FileType.Directory) === 0) {
+                        cwd = path.posix.dirname(target);
+                        fileArg = path.posix.basename(target);
+                    }
+                } catch (_) { /* stat failed — let the search command surface the error */ }
 
                 // Build rg command
                 let rgCmd = "rg --color=never --line-number";
@@ -637,16 +709,27 @@ function registerTools(mcpServer, s, logger, onFileUpdated, reviewEdit) {
                 if (context) rgCmd += ` -C ${parseInt(context, 10)}`;
                 if (max_results) rgCmd += ` --max-count ${parseInt(max_results, 10)}`;
                 rgCmd += ` ${shellEscape(pattern)}`;
+                if (fileArg) rgCmd += ` ${shellEscape(fileArg)}`;
 
                 let result = await execRemoteCommand(rgCmd, cwd);
 
-                // If rg not found (exit 127), fall back to grep -rn
+                // If rg not found (exit 127), fall back to grep.
+                // - LC_ALL=C: multibyte locales can make grep 50-100x slower
+                // - -E: rg patterns are ERE — default BRE would treat (a|b) literally
+                // - -I: skip binary files; -D skip: don't block on FIFOs/devices
+                // - --exclude-dir: grep has no .gitignore awareness, so a
+                //   repo-wide search on a network FS can otherwise run for minutes
                 if (result.exitCode === 127 || (result.stderr && result.stderr.includes("command not found"))) {
-                    let grepCmd = "grep -rn";
+                    let grepCmd = "LC_ALL=C grep -EnI -D skip";
+                    if (!fileArg) {
+                        grepCmd += " -r" +
+                            " --exclude-dir=.git --exclude-dir=node_modules --exclude-dir=__pycache__" +
+                            " --exclude-dir=.venv --exclude-dir=venv --exclude-dir=.tox --exclude-dir=.cache";
+                    }
                     if (include) grepCmd += ` --include=${shellEscape(include)}`;
                     if (context) grepCmd += ` -C ${parseInt(context, 10)}`;
                     if (max_results) grepCmd += ` -m ${parseInt(max_results, 10)}`;
-                    grepCmd += ` ${shellEscape(pattern)} .`;
+                    grepCmd += ` ${shellEscape(pattern)} ${fileArg ? shellEscape(fileArg) : "."}`;
 
                     result = await execRemoteCommand(grepCmd, cwd);
                 }
