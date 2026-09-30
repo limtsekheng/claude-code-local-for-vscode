@@ -21,22 +21,33 @@ module.exports = [
         },
 
         insertAt: {
-            searchRange: 30,
+            // 2.1.284 moved the chained executable/env assignment 31 lines
+            // below settingSources.
+            searchRange: 45,
             // Find the line that assigns env to H (the options object)
-            pattern: /\w+\.pathToClaudeCodeExecutable\s*=\s*\w+.*\w+\.executableArgs\s*=\s*\w+.*\w+\.env\s*=/,
-            fallbackPattern: /\.pathToClaudeCodeExecutable\s*=\s*\w+/,
+            pattern: /[\w$]+\.pathToClaudeCodeExecutable\s*=\s*[\w$]+.*[\w$]+\.executableArgs\s*=\s*[\w$]+.*[\w$]+\.env\s*=/,
+            fallbackPattern: /\.pathToClaudeCodeExecutable\s*=\s*[\w$]+/,
             relation: 'before',
-            contextRange: 200
+            contextRange: 250
         },
 
-        detectVars: (ctx) => {
+        detectVars: (ctx, fullCode) => {
             // Detect the diagnostics tracker variable (used for captureBaseline)
-            const diagMatch = ctx.match(/(\w+)\.captureBaseline\(/);
+            const diagMatch = ctx.match(/([\w$]+)\.captureBaseline\(/);
             // Detect the options object variable name (H in v2.1.71, q in v2.1.42)
-            const optsMatch = ctx.match(/let (\w+) = \{\s*\n\s*cwd:/);
+            // The options object may be one item in a comma-chained `let`
+            // declaration (2.1.284: `O = await ..., D = { cwd: ... }`), so
+            // do not require `let` immediately before its variable.
+            const optsMatch = ctx.match(/(?:let\s+)?([\w$]+)\s*=\s*\{\s*\n\s*cwd:/);
+            const spawnMatch = ctx.match(/async spawnClaude\(([^)]*)\)/);
+            const spawnParams = spawnMatch
+                ? spawnMatch[1].split(',').map((p) => p.trim().split(/\s*=\s*/)[0])
+                : [];
             return {
                 diagVar: diagMatch ? diagMatch[1] : 'B',
-                optsVar: optsMatch ? optsMatch[1] : 'H'
+                optsVar: optsMatch ? optsMatch[1] : 'H',
+                canUseToolVar: spawnParams[2] || 'Q',
+                permVar: spawnParams[5] || 'W'
             };
         },
 
@@ -325,7 +336,7 @@ module.exports = [
                 }]
             });
             this.output.info("forceLocal: CLI will run locally, file tools aliased to remote MCP, WebFetch disabled");
-            this.output.info(\`forceLocal: cwd=\${${vars.optsVar}.cwd}, disallowedTools=\${${vars.optsVar}.disallowedTools.join(",")}, allowedTools=\${${vars.optsVar}.allowedTools.join(",")}, permissionMode=\${V}, canUseTool=\${!!j}\`);
+            this.output.info(\`forceLocal: cwd=\${${vars.optsVar}.cwd}, disallowedTools=\${${vars.optsVar}.disallowedTools.join(",")}, allowedTools=\${${vars.optsVar}.allowedTools.join(",")}, permissionMode=\${${vars.permVar}}, canUseTool=\${!!${vars.canUseToolVar}}\`);
         } else {
             this.output.info(\`forceLocal: NOT active. forceLocal=\${require("vscode").workspace.getConfiguration("claudeCode").get("forceLocal")}, remoteName=\${require("vscode").env.remoteName}, remoteAuthority=\${require("vscode").env.remoteAuthority}, folderScheme=\${(require("vscode").workspace.workspaceFolders||[])[0]?.uri?.scheme}\`);
         }`

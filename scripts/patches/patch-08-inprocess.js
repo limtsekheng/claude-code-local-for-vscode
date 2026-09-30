@@ -30,14 +30,12 @@ module.exports = {
     detectVars: (ctx, fullCode) => {
         // Detect the MCP server variable (x in v2.1.71, j in v2.1.42)
         const serverMatch = ctx.match(/(\w+) = \w+\(\(\w+\) => \{\s*\n\s*this\.onExperimentGatesUpdated/);
-        // Detect channelId variable (z in v2.1.71, v in v2.1.42)
-        const channelMatch = ctx.match(/channelId:\s*(\w+)/);
         // Detect markdown plan check function (ev in v2.1.71, Dz in v2.1.42)
         const mdCheckMatch = ctx.match(/if \((\w+)\(\w+\)\)[\s\S]*?openMarkdownPreview/);
         // Permission mode = launchClaude's 4th parameter (x in v2.1.150). Must be in scope at the
         // patch site. Naive spawnClaude regex wrongly captures G from async (M, G, F).
         const code = fullCode || ctx;
-        const launchPermMatch = code.match(/async launchClaude\(\w+,\s*\w+,\s*\w+,\s*(\w+),/);
+        const launchMatch = code.match(/async launchClaude\(([\w$]+),\s*[\w$]+,\s*[\w$]+,\s*([\w$]+),/);
         // Detect the getAdditionalMcpServers result var (O in v2.1.71)
         const addMcpMatch = ctx.match(/([\w$]+) = this\.getAdditionalMcpServers\(\)/);
         // Detect module-level zod var compatible with MCP SDK (e in v2.1.71, O0 in v2.1.150).
@@ -57,9 +55,12 @@ module.exports = {
         }
         return {
             serverVar: serverMatch ? serverMatch[1] : 'x',
-            channelVar: channelMatch ? channelMatch[1] : 'z',
+            // The first launchClaude parameter is the active channel id. Looking
+            // for the first `channelId:` in a wide context is unsafe in 2.1.284
+            // because an unrelated callback appears first.
+            channelVar: launchMatch ? launchMatch[1] : 'z',
             mdCheckFn: mdCheckMatch ? mdCheckMatch[1] : 'ev',
-            permVar: launchPermMatch ? launchPermMatch[1] : 'x',
+            permVar: launchMatch ? launchMatch[2] : 'x',
             addMcpVar: addMcpMatch ? addMcpMatch[1] : 'O',
             zodVar: zodVar
         };

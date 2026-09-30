@@ -11,23 +11,25 @@ module.exports = {
     appliedCheck: /isForceLocalMode\(\) \? \[getForceLocalCwd\(\)\]/,
 
     anchor: {
-        // KM()/yF() — lock file creation. Use the unique .lock file pattern
-        pattern: /\$\{\w+\}\.lock/,
-        context: /transport:\s*"ws"/,
+        // cs()/KM()/yF() — lock file creation. 2.1.284 uses `$` for
+        // the lock id, so anchor on the stable lock JSON fields instead.
+        pattern: /transport:\s*"ws"/,
+        context: /workspaceFolders[\s\S]{0,300}authToken/,
+        contextRange: 20,
         hint: 'Lock file creation function with ${z}.lock and transport:"ws"'
     },
 
     insertAt: {
         searchRange: 15,
         // Find the line that maps workspaceFolders to fsPath
-        pattern: /\w+ = \w+\.workspace\.workspaceFolders\?\.map\(\(\w+\) => \w+\.uri\.fsPath\)/,
+        pattern: /[\w$]+ = [\w$]+\.workspace\.workspaceFolders\?\.map\(\(([\w$]+)\) => \1\.uri\.fsPath\) \|\| \[\]/,
         relation: 'replace',
         replaceLines: 1
     },
 
     detectVars: (ctx) => {
         // Detect the result variable (K), vscode alias, and callback param
-        const match = ctx.match(/(\w+) = (\w+)\.workspace\.workspaceFolders\?\.map\(\((\w+)\) => \3\.uri\.fsPath\)/);
+        const match = ctx.match(/([\w$]+) = ([\w$]+)\.workspace\.workspaceFolders\?\.map\(\(([\w$]+)\) => \3\.uri\.fsPath\) \|\| \[\]/);
         return {
             resultVar: match ? match[1] : 'K',
             vscAlias: match ? match[2] : 'WJ',

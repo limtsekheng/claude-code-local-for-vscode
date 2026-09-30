@@ -12,27 +12,27 @@ module.exports = {
 
     anchor: {
         pattern: /claude-vscode\.updateSupported/,
-        context: /createOutputChannel.*Claude VSCode/,
+        context: /registerFileSystemProvider|registerTextDocumentContentProvider/,
+        contextRange: 20,
         hint: 'NA6() function with "claude-vscode.updateSupported" context key'
     },
 
     insertAt: {
         searchRange: 5,
-        pattern: /\w+\.commands\.executeCommand\("setContext",\s*"claude-vscode\.updateSupported",\s*!1\)/,
+        pattern: /[\w$]+\.commands\.executeCommand\("setContext",\s*"claude-vscode\.updateSupported",\s*!1\)/,
         relation: 'after'
     },
 
     detectVars: (ctx) => {
         // Detect vscode alias (L6 in current)
-        const vscMatch = ctx.match(/(\w+)\.commands\.executeCommand\("setContext",\s*"claude-vscode\.updateSupported"/);
-        // Detect extension context var (v in current)
-        const ctxMatch = ctx.match(/(\w+)\.subscriptions\.push\(\w+\)/);
-        // Detect logger var (z in current)
-        const logMatch = ctx.match(/let (\w+) = \w+\.window\.createOutputChannel\("Claude VSCode"/);
+        const vscMatch = ctx.match(/([\w$]+)\.commands\.executeCommand\("setContext",\s*"claude-vscode\.updateSupported"/);
+        // In 2.1.284 activation was split into wg0(context) and
+        // Cg0(context, logger); use Cg0's parameters at this insertion point.
+        const fnMatch = ctx.match(/function [\w$]+\(([\w$]+),\s*([\w$]+)\) \{/);
         return {
             vscAlias: vscMatch ? vscMatch[1] : 'L6',
-            ctxVar: ctxMatch ? ctxMatch[1] : 'v',
-            logVar: logMatch ? logMatch[1] : 'z'
+            ctxVar: fnMatch ? fnMatch[1] : 'v',
+            logVar: fnMatch ? fnMatch[2] : 'z'
         };
     },
 

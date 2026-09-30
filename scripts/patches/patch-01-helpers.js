@@ -17,9 +17,10 @@ module.exports = {
     },
 
     insertAt: {
-        searchRange: 10,
+        searchRange: 15,
         // Find the function definition line before the openDiff tool
-        pattern: /^function \w+\(\w+, \w+, \w+, \w+, \w+, \w+, \w+\) \{/,
+        // 2.1.284 uses `$` as the first parameter, so allow JS identifiers with `$`.
+        pattern: /^function [A-Za-z_$][\w$]*\([A-Za-z_$][\w$]*(?:, [A-Za-z_$][\w$]*){6}\) \{/,
         relation: 'before'
     },
 

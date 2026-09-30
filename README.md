@@ -4,7 +4,7 @@
 
 > One extension, two modes: run Claude Code **locally** for no-internet servers, or **remotely** just like the official extension -- controlled by a single setting.
 
-**Base version**: Claude Code VS Code Extension v2.1.71 (Anthropic)
+**Base version**: Claude Code VS Code Extension v2.1.284 (Anthropic)
 **Platforms**: macOS ARM64 + Linux x86-64 (dual binary)
 **Status**: Functional -- all core tools verified
 
@@ -153,14 +153,14 @@ This installs `js-beautify` and `adm-zip`, used by the auto-update script.
 
 **Option A: Auto-update from official release (recommended)**
 
-Downloads the pinned version (v2.1.71) of the official VSIX, extracts binaries and webview assets, beautifies the code, applies all patches automatically, and builds a new VSIX:
+Downloads the pinned version (v2.1.284) of the official VSIX, extracts binaries and webview assets, beautifies the code, applies all patches automatically, and builds a new VSIX:
 
 ```bash
 # Build + install in one step
 npm run update -- --install
 
 # Or specify a version
-npm run update -- --version 2.1.71 --install
+npm run update -- --version 2.1.284 --install
 ```
 
 Other useful flags:
@@ -364,7 +364,7 @@ PreToolUse/PostToolUse hooks detect new IDE errors after edits and inject `<ide_
 | **Linux x64 remote only** | Remote Mode uses a Linux x86-64 binary. ARM64 Linux servers not yet supported. |
 | **Glob line numbers wrap at 100** | Cosmetic issue in the original webview -- not introduced by this patch. |
 | **API 403 telemetry errors** | CLI telemetry events get 403 errors (different extension ID). Non-functional. |
-| **Extension version locked** | Based on v2.1.71. Use `npm run update` to auto-apply patches to newer versions. |
+| **Extension version locked** | Based on v2.1.284. Use `npm run update` to auto-apply patches to newer versions. |
 | **Reload required for mode switch** | Changing `forceLocal` requires a VS Code reload because `extensionKind` is a static manifest property. |
 
 ---
@@ -378,7 +378,7 @@ The CLI binary must match the extension version exactly -- the internal protocol
 If you want to save disk space, you can replace the binary with a symlink to your system Claude, but **only if the versions match exactly**:
 
 ```bash
-# Only if your installed claude matches v2.1.71
+# Only if your installed claude matches v2.1.284
 ln -sf $(which claude) resources/native-binaries/darwin-arm64/claude
 ```
 
@@ -406,14 +406,14 @@ It may work but is untested. The extension uses VS Code APIs extensively, so com
 
 ### How do I update when a new Claude Code version is released?
 
-The default `npm run update` downloads the **pinned** version (v2.1.71) that all patches are tested against. To try a newer version, pass `--version` explicitly:
+The default `npm run update` downloads the **pinned** version (v2.1.284) that all patches are tested against. To try a newer version, pass `--version` explicitly:
 
 ```bash
-# Default: pinned v2.1.71 (patches guaranteed to apply)
+# Default: pinned v2.1.284 (patches guaranteed to apply)
 node scripts/update.js --install
 
 # Explicit newer version (patches may need updating)
-node scripts/update.js --version 2.1.71 --install
+node scripts/update.js --version 2.1.284 --install
 ```
 
 If patches fail on a newer version, use `--dry-run` first to check which anchors need updating.
@@ -490,6 +490,12 @@ claude-code-vscode/
 ---
 
 ## 11. Changelog
+
+### v2.1.284 (2026-09)
+- **Upgraded base** from Claude Code v2.1.150 to v2.1.284.
+- Adapted all 22 patch anchors to the upstream launch, diff, terminal, webview, and activation refactors.
+- Added complete generated-bundle syntax validation and spawn-options consistency checks.
+- Bundled and validated Darwin ARM64, Linux x64, and Windows x64 CLI binaries.
 
 ### v2.1.71 (2026-03)
 - **Upgraded base** from Claude Code v2.1.42 to v2.1.71

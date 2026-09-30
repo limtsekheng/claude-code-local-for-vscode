@@ -12,9 +12,11 @@ module.exports = [
         appliedCheck: /forceLocal: RY remote read failed/,
 
         anchor: {
-            // Jk()/RY() function with the [Claude Code] diff tab — 9 params
-            pattern: /^async function \w+\(\w+, \w+, \w+, \w+, \w+, \w+, \w+, \w+, \w+\) \{/,
+            // rV1()/Jk()/RY() function with the [Claude Code] diff tab.
+            // The function grew from 9 to 12 parameters in 2.1.284.
+            pattern: /^async function [\w$]+\(/,
             context: /✻ \[Claude Code\]/,
+            contextRange: 20,
             hint: 'Diff tab function (Jk/RY) — 9 params, creates [Claude Code] diff tab'
         },
 
@@ -90,36 +92,42 @@ module.exports = [
         appliedCheck: /setEditOverride.*toRemotePath/,
 
         anchor: {
-            pattern: /diff_accepted/,
-            context: /"multiple".*"single"/,
+            pattern: /if \([\w$]+\.accepted\) \{/,
+            context: /diff_accepted[\s\S]*?"multiple"[\s\S]*?"single"/,
+            contextRange: 8,
             hint: 'Accept handler in Jk()/RY() diff flow with "multiple"/"single"'
         },
 
         insertAt: {
-            searchRange: 10,
-            // Find the accepted handler line with diff_accepted + "multiple"/"single"
-            pattern: /if \([\w$]+\.accepted\) return [\w$]+\.info\("diff_accepted"/,
+            searchRange: 6,
+            // 2.1.284 expanded the accepted handler into a seven-line block.
+            pattern: /if \([\w$]+\.accepted\) \{/,
             relation: 'replace',
-            replaceLines: 1
+            replaceLines: 7
         },
 
         detectVars: (ctx) => {
-            // Match: if (J6.accepted) return z.info("diff_accepted", D), IZ(U, $, A.getText(), N ? "multiple" : "single");
-            const lineMatch = ctx.match(/if \(([\w$]+)\.accepted\) return ([\w$]+)\.info\("diff_accepted", ([\w$]+)\), ([\w$]+)\(([\w$]+), ([\w$]+), ([\w$]+)\.getText\(\), ([\w$]+) \? "multiple" : "single"\)/);
+            const acceptMatch = ctx.match(/if \(([\w$]+)\.accepted\) \{/);
+            const logMatch = ctx.match(/([\w$]+)\.info\("diff_accepted", ([\w$]+)\)/);
+            const unchangedMatch = ctx.match(/if \([\w$]+\.info\("diff_accepted"[\s\S]*?,\s*([\w$]+) === ([\w$]+)\) return ([\w$]+);/);
+            const applyMatch = ctx.match(/return ([\w$]+)\(([\w$]+), ([\w$]+), ([\w$]+), ([\w$]+) \? "multiple" : "single"/);
             return {
-                acceptVar: lineMatch ? lineMatch[1] : 'J6',
-                logVar: lineMatch ? lineMatch[2] : 'z',
-                diffLabel: lineMatch ? lineMatch[3] : 'D',
-                applyFn: lineMatch ? lineMatch[4] : 'IZ',
-                filePathVar: lineMatch ? lineMatch[5] : 'U',
-                oldContentVar: lineMatch ? lineMatch[6] : '$',
-                docVar: lineMatch ? lineMatch[7] : 'A',
-                modeVar: lineMatch ? lineMatch[8] : 'N'
+                acceptVar: acceptMatch ? acceptMatch[1] : 't',
+                logVar: logMatch ? logMatch[1] : '$',
+                diffLabel: logMatch ? logMatch[2] : 'F',
+                currentContentVar: unchangedMatch ? unchangedMatch[1] : 'C',
+                proposedContentVar: unchangedMatch ? unchangedMatch[2] : 'j',
+                unchangedResultVar: unchangedMatch ? unchangedMatch[3] : 'W',
+                applyFn: applyMatch ? applyMatch[1] : 'bm',
+                filePathVar: applyMatch ? applyMatch[2] : 'Y',
+                oldContentVar: applyMatch ? applyMatch[3] : 'D',
+                modeVar: applyMatch ? applyMatch[5] : 'z'
             };
         },
 
         generate: (vars) => `            if (${vars.acceptVar}.accepted) {
-                var _userText = ${vars.docVar}.getText();
+                ${vars.logVar}.info("diff_accepted", ${vars.diffLabel});
+                var _userText = ${vars.currentContentVar};
                 if (isForceLocalMode()) {
                     try {
                         var _rt_acc = require("./src/remote-tools");
@@ -127,7 +135,10 @@ module.exports = [
                         ${vars.logVar}.info("forceLocal: user modified diff, stored override for", ${vars.filePathVar});
                     } catch (_e_acc) {}
                 }
-                return ${vars.logVar}.info("diff_accepted", ${vars.diffLabel}), ${vars.applyFn}(${vars.filePathVar}, ${vars.oldContentVar}, _userText, ${vars.modeVar} ? "multiple" : "single");
+                if (${vars.currentContentVar} === ${vars.proposedContentVar}) return ${vars.unchangedResultVar};
+                return ${vars.applyFn}(${vars.filePathVar}, ${vars.oldContentVar}, _userText, ${vars.modeVar} ? "multiple" : "single", {
+                    normalizeLineEndings: L
+                });
             }
             return`
     },
@@ -138,10 +149,10 @@ module.exports = [
         appliedCheck: /forceLocal: Ac remote read failed/,
 
         anchor: {
-            // Hi()/Ac() — MCP openDiff handler, near TabInputTextDiff area
-            pattern: /\.info\("diff from"/,
-            context: /TabInputTextDiff/,
-            contextRange: 20,
+            // ug1()/Hi()/Ac() — MCP openDiff handler.
+            pattern: /^async function [\w$]+\(/,
+            context: /registerCommand\("type"/,
+            contextRange: 60,
             hint: 'Second diff function (Hi/Ac) near TabInputTextDiff, NOT the ✻ [Claude Code] diff'
         },
 
@@ -170,7 +181,8 @@ module.exports = [
             };
         },
 
-        generate: (vars) => `    if (isForceLocalMode()) {
+        generate: (vars) => `    let ${vars.uriVar};
+    if (isForceLocalMode()) {
         // forceLocal: read old content from remote, fall back to empty
         var _oldContent_ac = "";
         try {
@@ -186,8 +198,8 @@ module.exports = [
         ${vars.uriVar} = ${vars.vscAlias}.Uri.file(${vars.filePathVar});
         try {
             if ((await ${vars.vscAlias}.workspace.openTextDocument(${vars.uriVar})).isDirty) {
-                let X = ${vars.fsAlias}.readFileSync(${vars.filePathVar}, "utf8");
-                ${vars.uriVar} = ${vars.provVar}.createFile(${vars.filePathVar}, X).uri
+                let _localContent_ac = ${vars.fsAlias}.readFileSync(${vars.filePathVar}, "utf8");
+                ${vars.uriVar} = ${vars.provVar}.createFile(${vars.filePathVar}, _localContent_ac).uri
             }
         } catch (T) {
             ${vars.logVar}.info("leftTempFileProvider.createFile", ${vars.filePathVar}), ${vars.uriVar} = ${vars.provVar}.createFile(${vars.filePathVar}, "").uri

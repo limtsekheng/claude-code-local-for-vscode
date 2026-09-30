@@ -2,7 +2,7 @@
 	"name": "claude-code-local",
 	"displayName": "Claude Code Local for VS Code",
 	"description": "Claude Code for VS Code: Harness the power of Claude Code without leaving your IDE",
-	"version": "2.1.150",
+	"version": "2.1.284",
 	"publisher": "justimyhxu",
 	"license": "© Anthropic PBC. All rights reserved. Use is subject to the Legal Agreements outlined here: https://code.claude.com/docs/en/legal-and-compliance.",
 	"bugs": {
@@ -35,6 +35,7 @@
 			"properties": {
 				"claudeCode.environmentVariables": {
 					"type": "array",
+					"scope": "machine",
 					"items": {
 						"type": "object",
 						"properties": {
@@ -62,10 +63,12 @@
 				},
 				"claudeCode.allowDangerouslySkipPermissions": {
 					"type": "boolean",
+					"scope": "machine",
 					"description": "Allow bypass permissions mode. Recommended only for sandboxes with no internet access."
 				},
 				"claudeCode.claudeProcessWrapper": {
 					"type": "string",
+					"scope": "machine",
 					"description": "Executable path used to launch the Claude process."
 				},
 				"claudeCode.respectGitIgnore": {
@@ -75,14 +78,15 @@
 				},
 				"claudeCode.initialPermissionMode": {
 					"type": "string",
+					"scope": "machine",
 					"enum": [
 						"default",
+						"manual",
 						"acceptEdits",
 						"plan",
 						"bypassPermissions"
 					],
-					"default": "default",
-					"description": "Initial permission mode for new conversations."
+					"description": "Initial permission mode for new conversations. Unset defers to the Claude Code CLI's resolved default for the session. 'manual' is an alias for 'default', the mode labeled Manual in the UI; set either to always start in Manual."
 				},
 				"claudeCode.disableLoginPrompt": {
 					"type": "boolean",
@@ -93,6 +97,12 @@
 					"type": "boolean",
 					"default": true,
 					"description": "Automatically save files before Claude reads or writes them."
+				},
+				"claudeCode.focusView": {
+					"type": "boolean",
+					"default": false,
+					"scope": "application",
+					"description": "Focus view: hide tool calls and other in-progress activity in the chat, showing only your prompts and Claude's responses. Folded activity stays one click away, and a live indicator names the tool currently running. Usually toggled from the chat input's command menu, the Claude Code: Toggle Focus view command, or its ctrl+alt+f keybinding."
 				},
 				"claudeCode.useCtrlEnterToSend": {
 					"type": "boolean",
@@ -112,6 +122,11 @@
 					"default": "panel",
 					"description": "Where Claude opens by default. This setting updates automatically when you open Claude in a new location."
 				},
+				"claudeCode.lockEditorGroups": {
+					"type": "boolean",
+					"default": true,
+					"description": "Lock the editor groups Claude starts for its tabs, so files you open while a Claude tab is focused go to another group instead of next to it. When off, Claude never locks an editor group. Groups that are already locked stay locked until you unlock them."
+				},
 				"claudeCode.enableNewConversationShortcut": {
 					"type": "boolean",
 					"default": false,
@@ -126,6 +141,50 @@
 					"type": "boolean",
 					"default": false,
 					"description": "Hide the onboarding checklist in Claude Code."
+				},
+				"claudeCode.attachOpenFile": {
+					"type": "boolean",
+					"default": true,
+					"scope": "application",
+					"description": "Add the file that is open in the editor to your messages, and show it in the message box. When off, only text you select is added."
+				},
+				"claudeCode.continueAfterReload": {
+					"type": "boolean",
+					"default": true,
+					"scope": "application",
+					"description": "After a window reload, a restored session continues the step that was interrupted."
+				},
+				"claudeCode.scrollToBottomOnSend": {
+					"type": "boolean",
+					"default": true,
+					"scope": "application",
+					"description": "Scroll the conversation to the bottom when you send a message. When off, the conversation stays where you left it."
+				},
+				"claudeCode.showMessageTimestamps": {
+					"type": "boolean",
+					"default": false,
+					"scope": "application",
+					"description": "Show when each message was sent. A date line marks where the day changes."
+				},
+				"claudeCode.archiveInactiveSessions": {
+					"type": "number",
+					"enum": [
+						0,
+						1,
+						2,
+						7,
+						14
+					],
+					"enumItemLabels": [
+						"Never",
+						"1 day",
+						"2 days",
+						"7 days",
+						"14 days"
+					],
+					"default": 14,
+					"scope": "application",
+					"description": "Archive a session after this long with no activity. Sessions that are open, running, waiting for input, or unread are never archived automatically."
 				},
 				"claudeCode.usePythonEnvironment": {
 					"type": "boolean",
@@ -240,6 +299,10 @@
 				"title": "Claude Code: Focus input"
 			},
 			{
+				"command": "claude-vscode.focusLastMessage",
+				"title": "Claude Code: Focus last message"
+			},
+			{
 				"command": "claude-vscode.blur",
 				"title": "Claude Code: Blur input"
 			},
@@ -265,6 +328,28 @@
 				"command": "claude-vscode.rejectProposedDiff",
 				"title": "Claude Code: Reject Proposed Changes",
 				"enablement": "claude-vscode.viewingProposedDiff",
+				"icon": "$(discard)"
+			},
+			{
+				"command": "claude-vscode.acceptProposedHunk",
+				"title": "Claude Code: Accept Change at Cursor",
+				"enablement": "claude-vscode.viewingProposedDiff",
+				"icon": "$(check)"
+			},
+			{
+				"command": "claude-vscode.rejectProposedHunk",
+				"title": "Claude Code: Reject Change at Cursor",
+				"enablement": "claude-vscode.viewingProposedDiff",
+				"icon": "$(discard)"
+			},
+			{
+				"command": "claude-vscode.acceptProposedHunkFromBar",
+				"title": "Accept this change",
+				"icon": "$(check)"
+			},
+			{
+				"command": "claude-vscode.rejectProposedHunkFromBar",
+				"title": "Reject this change",
 				"icon": "$(discard)"
 			},
 			{
@@ -296,8 +381,24 @@
 				"title": "Claude Code: Show Logs"
 			},
 			{
+				"command": "claude-vscode.toggleFocusView",
+				"title": "Claude Code: Toggle Focus view"
+			},
+			{
 				"command": "claude-vscode.openWalkthrough",
 				"title": "Claude Code: Open Walkthrough"
+			},
+			{
+				"command": "claude-vscode.markSessionUnread",
+				"title": "Claude Code: Mark Session as Unread"
+			},
+			{
+				"command": "claude-vscode.renameSessionTab",
+				"title": "Claude Code: Rename Session Tab"
+			},
+			{
+				"command": "claude-vscode.addSessionTabToGroup",
+				"title": "Claude Code: Add Session Tab to Group"
 			}
 		],
 		"keybindings": [
@@ -354,6 +455,11 @@
 				"win": "ctrl+n",
 				"linux": "ctrl+n",
 				"when": "config.claudeCode.enableNewConversationShortcut && (activeWebviewPanelId == 'claudeVSCodePanel' || (claude-vscode.sideBarActive && !editorFocus && !panelFocus))"
+			},
+			{
+				"command": "claude-vscode.toggleFocusView",
+				"key": "ctrl+alt+f",
+				"when": "activeWebviewPanelId == 'claudeVSCodePanel' || claude-vscode.sideBarActive"
 			},
 			{
 				"command": "claude-vscode.reopenClosedSession",
@@ -460,6 +566,30 @@
 			}
 		],
 		"menus": {
+			"comments/commentThread/title": [
+				{
+					"command": "claude-vscode.acceptProposedHunkFromBar",
+					"when": "commentController == claude-code-hunks",
+					"group": "inline@1"
+				},
+				{
+					"command": "claude-vscode.rejectProposedHunkFromBar",
+					"when": "commentController == claude-code-hunks",
+					"group": "inline@2"
+				}
+			],
+			"editor/context": [
+				{
+					"command": "claude-vscode.acceptProposedHunk",
+					"when": "resourceScheme == _claude_vscode_fs_right",
+					"group": "claudecode@1"
+				},
+				{
+					"command": "claude-vscode.rejectProposedHunk",
+					"when": "resourceScheme == _claude_vscode_fs_right",
+					"group": "claudecode@2"
+				}
+			],
 			"editor/title": [
 				{
 					"command": "claude-vscode.acceptProposedDiff",
@@ -492,10 +622,44 @@
 					"group": "navigation"
 				}
 			],
+			"webview/context": [
+				{
+					"command": "claude-vscode.markSessionUnread",
+					"when": "webviewId == 'claudeVSCodePanel'"
+				},
+				{
+					"command": "claude-vscode.renameSessionTab",
+					"when": "webviewId == 'claudeVSCodePanel'"
+				},
+				{
+					"command": "claude-vscode.addSessionTabToGroup",
+					"when": "webviewId == 'claudeVSCodePanel'"
+				}
+			],
 			"commandPalette": [
 				{
 					"command": "claude-vscode.update",
 					"when": "claude-vscode.updateSupported"
+				},
+				{
+					"command": "claude-vscode.acceptProposedHunkFromBar",
+					"when": "false"
+				},
+				{
+					"command": "claude-vscode.rejectProposedHunkFromBar",
+					"when": "false"
+				},
+				{
+					"command": "claude-vscode.markSessionUnread",
+					"when": "activeWebviewPanelId == 'claudeVSCodePanel'"
+				},
+				{
+					"command": "claude-vscode.renameSessionTab",
+					"when": "activeWebviewPanelId == 'claudeVSCodePanel'"
+				},
+				{
+					"command": "claude-vscode.addSessionTabToGroup",
+					"when": "activeWebviewPanelId == 'claudeVSCodePanel'"
 				},
 				{
 					"command": "claude-vscode.editor.openLast",
@@ -512,6 +676,10 @@
 				{
 					"command": "claude-vscode.blur",
 					"when": "false"
+				},
+				{
+					"command": "claude-vscode.focusLastMessage",
+					"when": "!config.claudeCode.useTerminal"
 				},
 				{
 					"command": "claude-vscode.newConversation",

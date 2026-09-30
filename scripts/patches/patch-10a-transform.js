@@ -13,7 +13,7 @@
  * no longer replace the loop body; we just inject one line at the top.
  */
 
-const FOR_AWAIT_OPEN = /for await \(let \w+ of \w+\) \{?\s*$/;
+const FOR_AWAIT_OPEN = /for await \(let [\w$]+ of [\w$]+\) \{?\s*$/;
 
 const patch10aFunc = {
     id: 'patch-10a',
@@ -25,8 +25,8 @@ const patch10aFunc = {
         // The for-await loop that sends io_messages in launchClaude.
         // In v2.1.150 the body is multi-line, so the opening is just `... ) {`.
         pattern: FOR_AWAIT_OPEN,
-        context: /io_message/,
-        contextRange: 30,
+        context: /subtype === "bridge_state"/,
+        contextRange: 40,
         hint: 'for-await loop in launchClaude that sends io_messages'
     },
 
@@ -37,8 +37,8 @@ const patch10aFunc = {
     },
 
     detectVars: (ctx) => {
-        const forMatch = ctx.match(/for await \(let (\w+) of (\w+)\)/);
-        const chMatch = ctx.match(/channelId:\s*(\w+)/);
+        const forMatch = ctx.match(/for await \(let ([\w$]+) of ([\w$]+)\)/);
+        const chMatch = ctx.match(/channelId:\s*([\w$]+)/);
         return {
             iterVar: forMatch ? forMatch[1] : 'A',
             queryVar: forMatch ? forMatch[2] : 'M',
@@ -92,8 +92,8 @@ const patch10aLoop = {
 
     anchor: {
         pattern: FOR_AWAIT_OPEN,
-        context: /io_message/,
-        contextRange: 30,
+        context: /subtype === "bridge_state"/,
+        contextRange: 40,
         hint: 'for-await loop sending io_messages'
     },
 
@@ -104,7 +104,7 @@ const patch10aLoop = {
     },
 
     detectVars: (ctx) => {
-        const forMatch = ctx.match(/for await \(let (\w+) of (\w+)\)/);
+        const forMatch = ctx.match(/for await \(let ([\w$]+) of ([\w$]+)\)/);
         return {
             iterVar: forMatch ? forMatch[1] : 'A'
         };

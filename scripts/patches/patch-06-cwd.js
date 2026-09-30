@@ -17,29 +17,30 @@ module.exports = [
         appliedCheck: /resolveWebviewView[\s\S]{1,600}isForceLocalMode\(\) \? getForceLocalCwd\(\)/,
 
         anchor: {
-            pattern: /resolveWebviewView\(\w+, \w+, \w+\) \{/,
+            pattern: /resolveWebviewView\([\w$]+, [\w$]+, [\w$]+\) \{/,
+            context: /getHtmlForWebview/,
+            contextRange: 20,
             hint: 'resolveWebviewView method'
         },
 
         insertAt: {
-            searchRange: 20,
-            pattern: /\w+ = \w+\.realpathSync\(\w+\[0\] \|\| \w+\.homedir\(\)\)\.normalize\("NFC"\)/,
+            searchRange: 25,
+            pattern: /[\w$]+ = cE\([\w$]+\)(?:,|;)/,
             relation: 'replace',
             replaceLines: 1
         },
 
         detectVars: (ctx) => {
-            const match = ctx.match(/(\w+) = (\w+)\.realpathSync\((\w+)\[0\] \|\| (\w+)\.homedir\(\)\)\.normalize\("NFC"\)/);
+            const match = ctx.match(/([\w$]+) = cE\(([\w$]+)\)(,|;)/);
             return {
-                resultVar: match ? match[1] : 'K',
-                fsAlias: match ? match[2] : 'RF',
-                arrVar: match ? match[3] : 'N',
-                osAlias: match ? match[4] : 'bF'
+                resultVar: match ? match[1] : 'Y',
+                arrVar: match ? match[2] : 'X',
+                terminator: match ? match[3] : ','
             };
         },
 
         generate: (vars) =>
-            `            ${vars.resultVar} = isForceLocalMode() ? getForceLocalCwd() : ${vars.fsAlias}.realpathSync(${vars.arrVar}[0] || ${vars.osAlias}.homedir()).normalize("NFC"),`
+            `            ${vars.resultVar} = isForceLocalMode() ? getForceLocalCwd() : cE(${vars.arrVar})${vars.terminator}`
     },
     {
         id: 'patch-06b',
@@ -49,31 +50,31 @@ module.exports = [
         appliedCheck: /setupPanel[\s\S]{1,500}isForceLocalMode\(\) \? getForceLocalCwd\(\)/,
 
         anchor: {
-            // setupPanel method definition (not call site) — has realpathSync inside
-            pattern: /^\s+setupPanel\(\w+, \w+, \w+.*\) \{/,
-            context: /realpathSync/,
+            // setupPanel method definition (not call site)
+            pattern: /^\s+setupPanel\([\w$]+, [\w$]+, [\w$]+, [\w$]+, [\w$]+\) \{/,
+            context: /panelFullEditor\.set/,
+            contextRange: 15,
             hint: 'setupPanel method definition with realpathSync inside'
         },
 
         insertAt: {
-            searchRange: 20,
-            pattern: /\w+ = \w+\.realpathSync\(\w+\[0\] \|\| \w+\.homedir\(\)\)\.normalize\("NFC"\)/,
+            searchRange: 25,
+            pattern: /[\w$]+ = cE\([\w$]+\)(?:,|;)/,
             relation: 'replace',
             replaceLines: 1
         },
 
         detectVars: (ctx) => {
-            const match = ctx.match(/(\w+) = (\w+)\.realpathSync\((\w+)\[0\] \|\| (\w+)\.homedir\(\)\)\.normalize\("NFC"\)/);
+            const match = ctx.match(/([\w$]+) = cE\(([\w$]+)\)(,|;)/);
             return {
-                resultVar: match ? match[1] : 'K',
-                fsAlias: match ? match[2] : 'RF',
-                arrVar: match ? match[3] : 'N',
-                osAlias: match ? match[4] : 'bF'
+                resultVar: match ? match[1] : 'z',
+                arrVar: match ? match[2] : 'W',
+                terminator: match ? match[3] : ','
             };
         },
 
         generate: (vars) =>
-            `            ${vars.resultVar} = isForceLocalMode() ? getForceLocalCwd() : ${vars.fsAlias}.realpathSync(${vars.arrVar}[0] || ${vars.osAlias}.homedir()).normalize("NFC"),`
+            `            ${vars.resultVar} = isForceLocalMode() ? getForceLocalCwd() : cE(${vars.arrVar})${vars.terminator}`
     },
     {
         id: 'patch-06c',
@@ -82,33 +83,33 @@ module.exports = [
         appliedCheck: /resolveSessionListView[\s\S]{1,600}isForceLocalMode\(\) \? getForceLocalCwd\(\)/,
 
         anchor: {
-            // resolveSessionListView method definition — has realpathSync inside.
+            // resolveSessionListView method definition.
             // Added in v2.1.150 (sidebar session list webview). On Windows, the
             // unpatched realpathSync('/a2000') resolves to 'C:\a2000' and fails
             // with ENOENT, blocking extension activation in forceLocal mode.
-            pattern: /^\s+resolveSessionListView\(\w+, \w+, \w+\) \{/,
-            context: /realpathSync/,
+            pattern: /^\s+resolveSessionListView\([\w$]+, [\w$]+, [\w$]+\) \{/,
+            context: /this\.sessionListView\s*=/,
+            contextRange: 15,
             hint: 'resolveSessionListView method definition with realpathSync inside'
         },
 
         insertAt: {
-            searchRange: 20,
-            pattern: /\w+ = \w+\.realpathSync\(\w+\[0\] \|\| \w+\.homedir\(\)\)\.normalize\("NFC"\)/,
+            searchRange: 25,
+            pattern: /[\w$]+ = cE\([\w$]+\)(?:,|;)/,
             relation: 'replace',
             replaceLines: 1
         },
 
         detectVars: (ctx) => {
-            const match = ctx.match(/(\w+) = (\w+)\.realpathSync\((\w+)\[0\] \|\| (\w+)\.homedir\(\)\)\.normalize\("NFC"\)/);
+            const match = ctx.match(/([\w$]+) = cE\(([\w$]+)\)(,|;)/);
             return {
-                resultVar: match ? match[1] : 'B',
-                fsAlias: match ? match[2] : 'NI',
-                arrVar: match ? match[3] : 'K',
-                osAlias: match ? match[4] : 'KI'
+                resultVar: match ? match[1] : 'Y',
+                arrVar: match ? match[2] : 'X',
+                terminator: match ? match[3] : ';'
             };
         },
 
         generate: (vars) =>
-            `            ${vars.resultVar} = isForceLocalMode() ? getForceLocalCwd() : ${vars.fsAlias}.realpathSync(${vars.arrVar}[0] || ${vars.osAlias}.homedir()).normalize("NFC"),`
+            `            ${vars.resultVar} = isForceLocalMode() ? getForceLocalCwd() : cE(${vars.arrVar})${vars.terminator}`
     }
 ];

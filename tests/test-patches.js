@@ -6,12 +6,12 @@
  *
  * Tests:
  *   1. Patch framework (patcher.js) unit tests
- *   2. Each patch's detectVars against real v2.1.71 extension.js
+ *   2. Each patch's detectVars against the generated extension.js
  *   3. Generated code validity (syntax check via Function constructor)
  *   4. Patched extension.js structural checks (correct variable references)
  *   5. Zod variable correctness (the bug we fixed)
  *   6. remote-tools.js registerTools interface check
- *   7. Full pipeline dry-run (all 20 patches apply without failure)
+ *   7. Full pipeline dry-run (all registered patches apply without failure)
  *
  * Usage: node tests/test-patches.js
  */
@@ -100,7 +100,7 @@ function testPatcherUnit() {
 // ─── 2. detectVars against real extension.js ─────────────────────────────────
 
 function testDetectVars() {
-    section('2. detectVars on v2.1.71 extension.js');
+    section('2. detectVars on generated extension.js');
 
     if (!fs.existsSync(PATCHED_EXT)) {
         skip('detectVars tests', 'extension.js not found');
@@ -216,6 +216,17 @@ function testPatchedStructure() {
 
     const code = fs.readFileSync(PATCHED_EXT, 'utf8');
 
+    // Parse the complete generated bundle. Per-patch generate() checks skip
+    // replacement fragments and therefore cannot catch a fragment inserted at
+    // the wrong structural boundary (for example inside an object literal).
+    const syntax = require('child_process').spawnSync(
+        process.execPath, ['--check', PATCHED_EXT],
+        { encoding: 'utf8' }
+    );
+    assert('complete generated extension.js has valid syntax',
+        syntax.status === 0,
+        (syntax.stderr || syntax.stdout || `node --check exited ${syntax.status}`).trim());
+
     // All patches should have their appliedCheck markers present
     const { allPatches } = require(PATCHES_INDEX);
     for (const p of allPatches) {
@@ -243,6 +254,28 @@ function testPatchedStructure() {
         code.includes('function isForceLocalMode()'));
     assert('getForceLocalCwd() defined',
         code.includes('function getForceLocalCwd()'));
+
+    // The options object modified in the forceLocal block must be the same
+    // object later handed to the SDK. This caught 2.1.284's comma-chained
+    // declaration (`D = { cwd: ... }`) being misdetected as a parameter (`H`).
+    const forceLocalOpts = code.match(/if \(isForceLocalMode\(\)\) \{\s*\n\s*([\w$]+)\.cwd = getForceLocalCwd\(\)/);
+    assert('forceLocal modifies the SDK spawn options object',
+        !!forceLocalOpts &&
+        new RegExp(`${forceLocalOpts[1]}\\.pathToClaudeCodeExecutable\\s*=`).test(code),
+        `Detected forceLocal options variable: ${forceLocalOpts ? forceLocalOpts[1] : 'NOT FOUND'}`);
+
+    const acMarker = code.indexOf('forceLocal: Ac remote read failed');
+    const acRegion = acMarker >= 0 ? code.slice(acMarker - 800, acMarker + 1200) : '';
+    assert('MCP diff local fallback avoids file-path variable shadowing',
+        acRegion.includes('let _localContent_ac =') &&
+        !/let ([\w$]+) = [\w$]+\.readFileSync\(\1,/.test(acRegion),
+        'The local fallback must not shadow its file path before readFileSync');
+
+    const launchChannel = code.match(/async launchClaude\(([\w$]+),/);
+    const fileUpdatedChannel = code.match(/var _fileUpdatedCb[\s\S]{0,400}?channelId:\s*([\w$]+)/);
+    assert('Patch 08 uses launchClaude channel for file_updated',
+        !!launchChannel && !!fileUpdatedChannel && launchChannel[1] === fileUpdatedChannel[1],
+        `launch=${launchChannel?.[1] || 'N/A'}, file_updated=${fileUpdatedChannel?.[1] || 'N/A'}`);
 
     // No orphan references to removed features
     assert('no node-proxy references',
@@ -378,7 +411,7 @@ function testRemoteToolsInterface() {
 // ─── 7. Full pipeline dry-run ────────────────────────────────────────────────
 
 function testFullPipelineDryRun() {
-    section('7. Full Pipeline Dry-Run (all 20 patches)');
+    section('7. Full Pipeline Dry-Run (all registered patches)');
 
     // We need the UNPATCHED beautified file for this test.
     // If it doesn't exist, we can check if the patched file has all markers.

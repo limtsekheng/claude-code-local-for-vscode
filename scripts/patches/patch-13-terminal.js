@@ -12,26 +12,27 @@ module.exports = {
 
     anchor: {
         // AI6()/UA6() function that creates Claude terminal
-        pattern: /^async function \w+\(\w+, \w+, \w+ = !0, \w+, \w+ = \[\], \w+\)/,
+        pattern: /^async function [\w$]+\([\w$]+, [\w$]+, [\w$]+ = !0, [\w$]+, [\w$]+ = \[\], [\w$]+\)/,
         context: /Claude Code launching/,
         hint: 'Terminal launcher function (AI6/UA6) with "Claude Code launching..." progress notification'
     },
 
     insertAt: {
         searchRange: 15,
-        // After the progress notification block
-        pattern: /return new Promise\(\(\w+\) => setTimeout\(\w+, 2000\)\)/,
-        fallbackPattern: /Claude Code launching/,
-        relation: 'after-block'
+        // After the withProgress(...) statement. Using after-block from the
+        // nested `return new Promise(...)` line is unsafe because the patcher
+        // starts brace counting before it has seen the callback's opening brace.
+        pattern: /^\s{4}\}\);$/,
+        relation: 'after'
     },
 
     detectVars: (ctx) => {
         // Detect the vscode alias (C0 in current)
-        const vscMatch = ctx.match(/(\w+)\.window\.withProgress\(/);
+        const vscMatch = ctx.match(/([\w$]+)\.window\.withProgress\(/);
         // Detect the path module alias (Si in current)
-        const pathMatch = ctx.match(/(\w+)\.join\(\w+\.extensionPath, "resources"/);
+        const pathMatch = ctx.match(/([\w$]+)\.join\([\w$]+\.extensionPath, "resources"/);
         // Detect params: v=logger, z=context, V=prompt, N=args, K=location
-        const fnMatch = ctx.match(/async function \w+\((\w+), (\w+), \w+ = !0, (\w+), (\w+) = \[\], (\w+)\)/);
+        const fnMatch = ctx.match(/async function [\w$]+\(([\w$]+), ([\w$]+), [\w$]+ = !0, ([\w$]+), ([\w$]+) = \[\], ([\w$]+)\)/);
         return {
             vscAlias: vscMatch ? vscMatch[1] : 'C0',
             pathAlias: pathMatch ? pathMatch[1] : 'Si',
@@ -46,7 +47,7 @@ module.exports = {
     generate: (vars) => `    // --- Patch 13: forceLocal terminal mode — use node-pty to run CLI locally ---
     if (isForceLocalMode()) {
         var _flCwd = getForceLocalCwd();
-        var _flCliPath = wD6(${vars.ctxVar}) || ${vars.pathAlias}.join(${vars.ctxVar}.extensionPath, "resources", "native-binary", "claude");
+        var _flCliPath = Nu0(${vars.ctxVar}) || ${vars.pathAlias}.join(${vars.ctxVar}.extensionPath, "resources", "native-binary", process.platform === "win32" ? "claude.exe" : "claude");
 
         // Build CLI args: disallowed + allowed tools (MUST be space-separated, not comma)
         var _flCliArgs = [...${vars.argsVar},

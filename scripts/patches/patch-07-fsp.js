@@ -19,21 +19,21 @@ module.exports = [
         },
 
         insertAt: {
-            searchRange: 20,
+            searchRange: 25,
             // Start from the let declaration for the left FSP
-            pattern: /let \w+ = new \w+\("_claude_fs_left"\)/,
+            pattern: /let [\w$]+ = new [\w$]+\(iH\)/,
             relation: 'replace-region',
             // Region ends at the second registerFileSystemProvider + watch function
-            regionEnd: /\.subscriptions\.push\(\w+\.workspace\.registerFileSystemProvider\(\w+\.scheme, \w+\)\).*\w+\(\w+\.scheme\)/
+            regionEnd: /\.subscriptions\.push\([\w$]+\.workspace\.registerFileSystemProvider\([\w$]+\.scheme, [\w$]+\)\).*[\w$]+\([\w$]+\.scheme\)/
         },
 
         detectVars: (ctx) => {
-            const match = ctx.match(/(\w+)\.subscriptions\.push\((\w+)\.workspace\.registerFileSystemProvider\((\w+)\.scheme, \3\)\)/);
-            const logMatch = ctx.match(/(\w+)\.warn\("FileSystemProvider/) || ctx.match(/(\w+)\.info\("Claude code extension/);
-            const watchMatch = ctx.match(/subscriptions\.push\((\w+)\(\w+\.scheme\)\)/);
+            const match = ctx.match(/([\w$]+)\.subscriptions\.push\(([\w$]+)\.workspace\.registerFileSystemProvider\(([\w$]+)\.scheme, \3\)\)/);
+            const logMatch = ctx.match(/([\w$]+)\.warn\("FileSystemProvider/) || ctx.match(/([\w$]+)\.info\("Claude code extension/);
+            const watchMatch = ctx.match(/subscriptions\.push\(([\w$]+)\([\w$]+\.scheme\)\)/);
             // Detect the FSP variable names
-            const fspLeftMatch = ctx.match(/let (\w+) = new (\w+)\("_claude_fs_left"\)/);
-            const fspRightMatch = ctx.match(/let (\w+) = new (\w+)\("_claude_fs_right"\)/);
+            const fspLeftMatch = ctx.match(/let ([\w$]+) = new ([\w$]+)\((iH)\)/);
+            const fspRightMatch = ctx.match(/let ([\w$]+) = new ([\w$]+)\(nH\)/);
             return {
                 ctxVar: match ? match[1] : 'z',
                 vscAlias: match ? match[2] : 's9',
@@ -41,12 +41,14 @@ module.exports = [
                 watchFn: watchMatch ? watchMatch[1] : 'MI6',
                 fspLeft: fspLeftMatch ? fspLeftMatch[1] : 'U',
                 fspRight: fspRightMatch ? fspRightMatch[1] : 'V',
-                fspClass: fspLeftMatch ? fspLeftMatch[2] : 'EH'
+                fspClass: fspLeftMatch ? fspLeftMatch[2] : 'EH',
+                leftScheme: fspLeftMatch ? fspLeftMatch[3] : 'iH',
+                rightScheme: 'nH'
             };
         },
 
-        generate: (vars) => `    let ${vars.fspLeft} = new ${vars.fspClass}("_claude_fs_left");
-    let ${vars.fspRight} = new ${vars.fspClass}("_claude_fs_right");
+        generate: (vars) => `    let ${vars.fspLeft} = new ${vars.fspClass}(${vars.leftScheme});
+    let ${vars.fspRight} = new ${vars.fspClass}(${vars.rightScheme});
     if (isForceLocalMode()) {
         try {
             ${vars.ctxVar}.subscriptions.push(${vars.vscAlias}.workspace.registerFileSystemProvider(${vars.fspLeft}.scheme, ${vars.fspLeft}));
@@ -66,30 +68,31 @@ module.exports = [
         appliedCheck: /registerTextDocumentContentProvider[\s\S]{1,500}FileSystemProvider registration failed/,
 
         anchor: {
-            pattern: /_claude_vscode_fs_readonly/,
+            pattern: /claude-vscode\.updateSupported/,
             context: /registerFileSystemProvider/,
+            contextRange: 25,
             hint: 'NA6() readonly FileSystemProvider near _claude_vscode_fs_readonly'
         },
 
         insertAt: {
-            searchRange: 20,
+            searchRange: 30,
             // Start from the let declaration for the left FSP
-            pattern: /let [\w$]+ = new \w+\("_claude_vscode_fs_left"\)/,
+            pattern: /let [\w$]+ = new [\w$]+\(Lg\)/,
             relation: 'replace-region',
             // Region ends at registerTextDocumentContentProvider + watch function
-            regionEnd: /\.subscriptions\.push\(\w+\.workspace\.registerTextDocumentContentProvider\(\w+\.scheme, \w+\)\).*\w+\(\w+\.scheme\)/
+            regionEnd: /\.subscriptions\.push\([\w$]+\.workspace\.registerTextDocumentContentProvider\([\w$]+\.scheme, [\w$]+\)\).*[\w$]+\([\w$]+\.scheme\)/
         },
 
         detectVars: (ctx) => {
-            const vscMatch = ctx.match(/(\w+)\.commands\.executeCommand\("setContext",\s*"claude-vscode\.updateSupported"/) ||
-                             ctx.match(/(\w+)\.window\.createOutputChannel/);
-            const ctxMatch = ctx.match(/(\w+)\.subscriptions\.push\(\w+\.workspace\.registerFileSystemProvider/);
-            const logMatch = ctx.match(/(\w+)\.warn\("FileSystemProvider/) || ctx.match(/(\w+)\.info\("Starting/);
-            const watchMatch = ctx.match(/registerTextDocumentContentProvider[\s\S]*?subscriptions\.push\((\w+)\(\w+\.scheme\)\)/);
+            const vscMatch = ctx.match(/([\w$]+)\.commands\.executeCommand\("setContext",\s*"claude-vscode\.updateSupported"/) ||
+                             ctx.match(/([\w$]+)\.window\.createOutputChannel/);
+            const ctxMatch = ctx.match(/([\w$]+)\.subscriptions\.push\([\w$]+\.workspace\.registerFileSystemProvider/);
+            const logMatch = ctx.match(/function [\w$]+\([\w$]+,\s*([\w$]+)\)/);
+            const watchMatch = ctx.match(/registerTextDocumentContentProvider[\s\S]*?subscriptions\.push\(([\w$]+)\([\w$]+\.scheme\)\)/);
             // Detect FSP variable names and class names
-            const fspLeftMatch = ctx.match(/let (\w+) = new (\w+)\("_claude_vscode_fs_left"\)/);
-            const fspRightMatch = ctx.match(/let (\w+) = new (\w+)\("_claude_vscode_fs_right"\)/);
-            const readonlyMatch = ctx.match(/let (\w+) = new (\w+)\("_claude_vscode_fs_readonly"\)/);
+            const fspLeftMatch = ctx.match(/let ([\w$]+) = new ([\w$]+)\((Lg)\)/);
+            const fspRightMatch = ctx.match(/let ([\w$]+) = new ([\w$]+)\(\$Y\)/);
+            const readonlyMatch = ctx.match(/let ([\w$]+) = new ([\w$]+)\(_g\)/);
             return {
                 vscAlias: vscMatch ? vscMatch[1] : 'H6',
                 ctxVar: ctxMatch ? ctxMatch[1] : 'z',
@@ -100,13 +103,16 @@ module.exports = [
                 fspRight: fspRightMatch ? fspRightMatch[1] : 'U',
                 fspRightClass: fspRightMatch ? fspRightMatch[2] : 'RH',
                 fspReadonly: readonlyMatch ? readonlyMatch[1] : 'V',
-                fspReadonlyClass: readonlyMatch ? readonlyMatch[2] : 'oA'
+                fspReadonlyClass: readonlyMatch ? readonlyMatch[2] : 'oA',
+                leftScheme: fspLeftMatch ? fspLeftMatch[3] : 'Lg',
+                rightScheme: '$Y',
+                readonlyScheme: '_g'
             };
         },
 
-        generate: (vars) => `    let ${vars.fspLeft} = new ${vars.fspLeftClass}("_claude_vscode_fs_left");
-    let ${vars.fspRight} = new ${vars.fspRightClass}("_claude_vscode_fs_right");
-    let ${vars.fspReadonly} = new ${vars.fspReadonlyClass}("_claude_vscode_fs_readonly");
+        generate: (vars) => `    let ${vars.fspLeft} = new ${vars.fspLeftClass}(${vars.leftScheme});
+    let ${vars.fspRight} = new ${vars.fspRightClass}(${vars.rightScheme});
+    let ${vars.fspReadonly} = new ${vars.fspReadonlyClass}(${vars.readonlyScheme});
     if (isForceLocalMode()) {
         try {
             ${vars.ctxVar}.subscriptions.push(${vars.vscAlias}.workspace.registerFileSystemProvider(${vars.fspLeft}.scheme, ${vars.fspLeft}));
